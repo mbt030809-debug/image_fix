@@ -7,6 +7,12 @@ import {
   SIZES, pickSize, planRequest, layerPlacement, rectToCrop, placeInCanvas, apiMaskRGBA, toneOffsets, buildPatch, featherSigma,
 } from '../src/ai/plan.js';
 import { pickBestImageModel, listImageModels, wrapPrompt, buildMultipart, buildEditRequest, explainError, cleanKey } from '../src/ai/openai.js';
+import {
+  PROVIDERS, PROVIDER_IDS, SIZES_FREE, SIZES_CF, CF_MODELS, CF_MODEL_RE, blobToBase64, base64ToBlob, dataUrlToBlob, sniffType, instruct,
+  extractOpenRouterImages, parseOpenRouterModels, pickFreeImageModel, orderOpenRouterModels, parseCfModels, parseCloudflareImage,
+} from '../src/ai/providers.js';
+import { AiError } from '../src/ai/client.js';
+import { aiConfig, pcfg } from '../src/tools/aisettings.js';
 
 let pass = 0, fail = 0;
 function ok(cond, name, extra = '') { if (cond) pass++; else { fail++; console.log('  ✗ FAIL:', name, extra); } }
@@ -236,6 +242,155 @@ section('openai: errors / key');
   ok(o.key === 'other' && /400/.test(o.text) && /Invalid size/.test(o.text), 'other keeps status + message');
   ok(explainError(null).key === 'offline', 'null error does not throw');
   ok(cleanKey(' sk-proj-abc123 \n') === 'sk-proj-abc123' && cleanKey('short') === '' && cleanKey('한글키한글키한글키한글키') === '' && cleanKey('a'.repeat(500)) === '', 'cleanKey');
+}
+
+section('providers: binary helpers');
+{
+  const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 1, 2, 3, 250, 251, 252]);
+  const b64 = await blobToBase64(new Blob([png]));
+  ok(b64 === Buffer.from(png).toString('base64'), 'blobToBase64 matches Buffer');
+  const back = base64ToBlob(b64, 'application/octet-stream');
+  ok(back.type === 'image/png' && new Uint8Array(await back.arrayBuffer()).every((v, i) => v === png[i]), 'base64ToBlob sniffs PNG + roundtrips');
+  ok(sniffType(Uint8Array.from([0xff, 0xd8, 1])) === 'image/jpeg' && sniffType(Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50])) === 'image/webp' && sniffType(Uint8Array.from([1, 2, 3])) === null, 'sniffType');
+  const big = new Uint8Array(300000).map((_, i) => (i * 7) & 255); big.set([0x89, 0x50, 0x4e, 0x47]);
+  const bb = await blobToBase64(new Blob([big]));
+  ok(bb === Buffer.from(big).toString('base64'), 'blobToBase64 handles large blobs (chunked)');
+  const du = dataUrlToBlob('data:image/png;base64,' + b64);
+  ok(du && du.type === 'image/png' && du.size === png.length, 'dataUrlToBlob');
+  ok(dataUrlToBlob('data:text/plain,hello') === null && dataUrlToBlob('http://x/y.png') === null && dataUrlToBlob(null) === null, 'dataUrlToBlob rejects non-base64 / non-data');
+}
+
+section('providers: OpenRouter parse / models');
+{
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const r1 = extractOpenRouterImages({ choices: [{ message: { role: 'assistant', content: 'done', images: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,' + PNG } }] } }] });
+  ok(r1.length === 1 && r1[0].type === 'image/png' && r1[0].size > 50, 'message.images[] data URL');
+  const r2 = extractOpenRouterImages({ choices: [{ message: { content: [{ type: 'text', text: 'x' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,' + PNG } }] } }] });
+  ok(r2.length === 1, 'content[] image_url part');
+  const r3 = extractOpenRouterImages({ choices: [{ message: { content: 'here ![img](data:image/png;base64,' + PNG + ') ok' } }] });
+  ok(r3.length === 1, 'markdown data URL in text content');
+  ok(extractOpenRouterImages({ choices: [{ message: { content: 'sorry, text only' } }] }).length === 0 && extractOpenRouterImages({}).length === 0 && extractOpenRouterImages(null).length === 0, 'no images → empty');
+  ok(extractOpenRouterImages({ choices: [{ message: { images: [{ image_url: { url: 'https://x/y.png' } }] } }] }).length === 0, 'remote URLs are ignored (only data URLs)');
+
+  const models = { data: [
+    { id: 'a/text-only', created: 5, architecture: { input_modalities: ['text'], output_modalities: ['text'] }, pricing: { prompt: '0', completion: '0' } },
+    { id: 'old/img-edit:free', created: 100, architecture: { input_modalities: ['image', 'text'], output_modalities: ['image', 'text'] }, pricing: { prompt: '0', completion: '0' } },
+    { id: 'new/img-edit:free', created: 300, architecture: { input_modalities: ['image', 'text'], output_modalities: ['image'] }, pricing: { prompt: '0', completion: '0' } },
+    { id: 'zero/priced', created: 250, architecture: { input_modalities: ['image', 'text'], output_modalities: ['image', 'text'] }, pricing: { prompt: '0', completion: '0', image: '0', request: '0' } },
+    { id: 'free/t2i-only:free', created: 400, architecture: { input_modalities: ['text'], output_modalities: ['image'] }, pricing: { prompt: '0', completion: '0' } },
+    { id: 'paid/nano', created: 500, architecture: { input_modalities: ['image', 'text'], output_modalities: ['image', 'text'] }, pricing: { prompt: '0.0000003', completion: '0.0000025', image: '0.001', request: '0' } },
+    { id: 'half/zero', created: 260, architecture: { input_modalities: ['image'], output_modalities: ['image'] }, pricing: { prompt: '0', completion: '0.00002' } },
+    { name: 'broken' }, null,
+  ] };
+  const list = parseOpenRouterModels(models);
+  ok(list.map((m) => m.id).join() === 'paid/nano,free/t2i-only:free,new/img-edit:free,half/zero,zero/priced,old/img-edit:free', 'image-output models only, newest first', list.map((m) => m.id).join());
+  const by = Object.fromEntries(list.map((m) => [m.id, m]));
+  ok(by['new/img-edit:free'].free && by['zero/priced'].free && !by['paid/nano'].free && !by['half/zero'].free, 'free = :free suffix or all-zero pricing');
+  ok(by['paid/nano'].edit && !by['free/t2i-only:free'].edit, 'edit = image input supported');
+  ok(pickFreeImageModel(list) === 'new/img-edit:free', 'auto pick = newest FREE model that accepts image input (skips text-to-image only)');
+  ok(pickFreeImageModel([]) === null && pickFreeImageModel(null) === null && pickFreeImageModel(list.filter((m) => !m.free)) === null, 'no free edit model → null');
+  const ord = orderOpenRouterModels(list);
+  ok(ord.meta['new/img-edit:free'].join() === 'image' && ord.meta['paid/nano'].join() === 'image,text' && Object.keys(ord.meta).length === ord.ids.length, 'meta carries each model\'s output modalities');
+  ok(ord.ids.join() === 'new/img-edit:free,zero/priced,old/img-edit:free,paid/nano,half/zero' && ord.free.join() === 'new/img-edit:free,zero/priced,old/img-edit:free', 'UI order: free edit models first', ord.ids.join());
+}
+
+section('providers: OpenRouter / Cloudflare request builders');
+{
+  const img = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])], { type: 'image/png' });
+  const marked = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 9, 9, 9, 9])], { type: 'image/png' });
+  const OR = PROVIDERS.openrouter;
+  const req = await OR.buildEdit({ model: 'new/img-edit:free', prompt: '  셔츠를 파란색으로  ', size: SIZES_FREE[0], quality: 'high', n: 3 }, { image: img, marked });
+  ok(req.method === 'POST' && req.path === '/chat/completions' && req.contentType === 'application/json', 'openrouter request shape');
+  const body = JSON.parse(await req.body.text());
+  ok(body.model === 'new/img-edit:free' && body.stream === false && body.modalities.join() === 'image,text', 'openrouter body: model / modalities / non-stream');
+  const parts = body.messages[0].content;
+  ok(parts.length === 3 && parts[0].type === 'text' && /Image 1/.test(parts[0].text) && /Image 2/.test(parts[0].text) && /셔츠를 파란색으로$/.test(parts[0].text), 'openrouter prompt = instruction + user request');
+  ok(parts[1].image_url.url === 'data:image/png;base64,' + Buffer.from(await img.arrayBuffer()).toString('base64') && parts[2].image_url.url.startsWith('data:image/png;base64,'), 'openrouter images as data URLs (original, marked)');
+  ok(!('n' in body) && !('quality' in body), 'openrouter body has no OpenAI-only params');
+  const reqImgOnly = await OR.buildEdit({ model: 'img/only', prompt: 'x', size: SIZES_FREE[0], outputs: ['image'] }, { image: img, marked });
+  ok(JSON.parse(await reqImgOnly.body.text()).modalities.join() === 'image', 'image-only models are asked for modalities ["image"]');
+  const reqBoth = await OR.buildEdit({ model: 'img/both', prompt: 'x', size: SIZES_FREE[0], outputs: ['image', 'text'] }, { image: img, marked });
+  ok(JSON.parse(await reqBoth.body.text()).modalities.join() === 'image,text', 'image+text models keep both modalities');
+
+  const CF = PROVIDERS.cloudflare;
+  const creq = await CF.buildEdit({ model: CF_MODELS[0], prompt: '하늘을 바꿔 주세요', size: SIZES_CF[1], quality: 'low', n: 1 }, { image: img, marked });
+  ok(creq.method === 'POST' && creq.path === '/accounts/{account}/ai/run/@cf/black-forest-labs/flux-2-klein-4b' && /^multipart\/form-data; boundary=/.test(creq.contentType), 'cloudflare request shape (account placeholder)');
+  const fd = await new Response(creq.body, { headers: { 'content-type': creq.contentType } }).formData();
+  ok(fd.get('width') === '960' && fd.get('height') === '640' && String(fd.get('prompt')).includes('하늘을 바꿔 주세요') && /Image 2/.test(String(fd.get('prompt'))), 'cloudflare fields: output size = 2× input class, prompt');
+  ok(fd.get('input_image_0').size === img.size && fd.get('input_image_1').size === marked.size && fd.get('input_image_0').type === 'image/png', 'cloudflare input_image_0/1');
+  let threw = null; try { await CF.buildEdit({ model: '@cf/../evil', prompt: 'x', size: SIZES_CF[0] }, { image: img, marked }); } catch (e) { threw = e; }
+  ok(threw instanceof AiError && threw.info.status === 404, 'cloudflare rejects malformed model names');
+  ok(CF_MODEL_RE.test('@cf/black-forest-labs/flux-2-dev') && !CF_MODEL_RE.test('@cf/a/b/c') && !CF_MODEL_RE.test('@hf/a/b') && !CF_MODEL_RE.test('@cf/./b'), 'CF_MODEL_RE');
+  const oreq = await PROVIDERS.openai.buildEdit({ model: 'gpt-image-1', prompt: 'x', size: SIZES[1], quality: 'low', n: 2 }, { image: img, mask: marked });
+  const ofd = await new Response(oreq.body, { headers: { 'content-type': oreq.contentType } }).formData();
+  ok(oreq.path === '/images/edits' && ofd.get('size') === '1536x1024' && ofd.get('n') === '2' && ofd.get('mask').size === marked.size, 'openai builder unchanged through the provider interface');
+  ok(/Image 1/.test(instruct('x')) && /magenta/.test(instruct('x')) && instruct('y'.repeat(5000)).split('Request: ')[1].length === 1500, 'instruct text + truncation');
+}
+
+section('providers: Cloudflare parse / models');
+{
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const j = (o) => new Blob([JSON.stringify(o)], { type: 'application/json' });
+  const a = await parseCloudflareImage(j({ result: { image: PNG }, success: true, errors: [], messages: [] }), 'application/json');
+  ok(a.length === 1 && a[0].type === 'image/png' && a[0].size > 50, 'result.image base64 → PNG blob');
+  const b = await parseCloudflareImage(j({ result: { images: [PNG] }, success: true }), 'application/json');
+  ok(b.length === 1, 'result.images[0]');
+  const raw = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1])], { type: 'image/png' });
+  ok((await parseCloudflareImage(raw, 'image/png'))[0] === raw, 'binary image response passes through');
+  let e1 = null; try { await parseCloudflareImage(j({ success: false, errors: [{ code: 3036, message: 'you have used up your daily free allocation' }], result: null }), 'application/json'); } catch (e) { e1 = e; }
+  ok(e1 instanceof AiError && e1.info.code === 'cf_3036' && explainError(e1.info).key === 'freequota', 'success:false → AiError that explains as free-quota');
+  let e2 = null; try { await parseCloudflareImage(j({ success: true, result: {} }), 'application/json'); } catch (e) { e2 = e; }
+  ok(e2 instanceof AiError && e2.info.code === 'no_image', 'missing image → no_image');
+  let e3 = null; try { await parseCloudflareImage(new Blob(['<html>']), 'text/html'); } catch (e) { e3 = e; }
+  ok(e3 instanceof AiError && e3.info.code === 'bad_response', 'non-JSON body → bad_response');
+  const names = parseCfModels({ result: [{ name: '@cf/black-forest-labs/flux-2-dev' }, { name: '@cf/meta/llama-3' }, { name: '@cf/runwayml/stable-diffusion-v1-5-inpainting' }, { name: 'bad' }, null] });
+  ok(names.join() === '@cf/black-forest-labs/flux-2-dev,@cf/runwayml/stable-diffusion-v1-5-inpainting', 'parseCfModels keeps image-edit models only', names.join());
+  ok(parseCfModels(null).length === 0 && parseCfModels({}).length === 0, 'parseCfModels tolerant');
+}
+
+section('providers: registry / sizes / errors / config');
+{
+  ok(PROVIDER_IDS.join() === 'openai,openrouter,cloudflare', 'provider ids');
+  for (const id of PROVIDER_IDS) {
+    const P = PROVIDERS[id];
+    ok(P.id === id && typeof P.buildEdit === 'function' && typeof P.edit === 'function' && typeof P.discover === 'function' && typeof P.test === 'function' && typeof P.name() === 'string' && typeof P.howto() === 'string' && typeof P.privacy('h') === 'string' && P.sizes.length === 3, 'provider interface: ' + id);
+  }
+  ok(PROVIDERS.openai.usesMask && !PROVIDERS.openrouter.usesMask && !PROVIDERS.cloudflare.usesMask, 'only OpenAI uses a real mask');
+  ok(!PROVIDERS.openai.free && PROVIDERS.openrouter.free && PROVIDERS.cloudflare.free, 'free flags');
+  ok(PROVIDERS.openai.maxN === 3 && PROVIDERS.openrouter.maxN === 1 && PROVIDERS.cloudflare.maxN === 1 && PROVIDERS.openai.hasQuality && !PROVIDERS.openrouter.hasQuality, 'variants/quality capabilities');
+  ok(PROVIDERS.cloudflare.extra.check('0123456789abcdef0123456789ABCDEF') && !PROVIDERS.cloudflare.extra.check('short') && !PROVIDERS.cloudflare.extra.check(''), 'cloudflare account id check');
+  ok(PROVIDERS.cloudflare.autoModel === CF_MODELS[0] && PROVIDERS.openrouter.autoModel === null, 'auto model: static for cloudflare, discovered for openrouter');
+  ok(PROVIDERS.openrouter.host() === 'openrouter.ai' && PROVIDERS.cloudflare.host() === 'api.cloudflare.com' && PROVIDERS.openai.host({ base: 'https://gw.example.com/v1' }) === 'gw.example.com' && PROVIDERS.openai.host(null) === 'api.openai.com', 'provider hosts');
+  ok(/저장·개선/.test(PROVIDERS.openrouter.privacy('openrouter.ai')) && !/저장·개선/.test(PROVIDERS.openai.privacy('api.openai.com')), 'free providers carry a data-use warning');
+  for (const s of SIZES_FREE) ok(Math.abs(s.ar - s.w / s.h) < 1e-9 && s.str === `${s.w}x${s.h}`, 'SIZES_FREE ' + s.str);
+  for (const s of SIZES_CF) ok(s.out.w === s.w * 2 && s.out.h === s.h * 2 && s.out.w <= 1024 && s.out.h <= 1024 && s.w % 16 === 0 && s.h % 16 === 0 && s.out.w % 16 === 0 && s.out.h % 16 === 0 && Math.max(s.w, s.h) < 512, 'SIZES_CF: inputs < 512, multiples of 16, output = 2×, ≤1024: ' + s.w + 'x' + s.h);
+  ok(pickSize(1.45, SIZES_CF).w === 480 && pickSize(1.45, SIZES_CF).h === 320 && pickSize(0.7, SIZES_CF).h === 480 && pickSize(1, SIZES_FREE).w === 1024, 'pickSize with provider size lists');
+  const pc = planRequest({ x0: 0.4, y0: 0.4, x1: 0.5, y1: 0.5 }, { w: 3000, h: 2000 }, { context: 0.4, sizes: SIZES_CF });
+  ok(pc.size.out && pc.size.w <= 512 && pc.fit.w <= pc.size.w && Math.abs(pc.rect.w / pc.rect.h - pc.size.w / pc.size.h) < 0.03, 'planRequest honours provider sizes (cloudflare 512 input classes)');
+
+  const k = (e) => explainError(e).key;
+  ok(k({ status: 429, code: '429', message: 'Rate limit exceeded: free-models-per-day | upstream' }) === 'freequota', 'openrouter free daily limit');
+  ok(k({ status: 429, code: 'cf_3036', message: 'you have used up your daily free allocation of 10,000 neurons' }) === 'freequota' && k({ status: 429, code: 'cf_3036' }) === 'freequota', 'cloudflare daily free allocation (3036)');
+  ok(k({ status: 403, code: 'cf_5035', message: 'This model requires the Workers Paid plan' }) === 'paidplan' && explainError({ status: 403, code: 'cf_5035' }).settings && k({ status: 429, code: 'cf_3040', message: 'Out of capacity' }) === 'capacity', 'cloudflare paid-plan-only model (5035) and out-of-capacity (3040)');
+  ok(k({ status: 402, code: '402', message: 'Insufficient credits' }) === 'quota' && explainError({ status: 402 }).settings, 'openrouter 402 → credits');
+  ok(k({ status: 404, code: '404', message: 'No endpoints found for x/y' }) === 'model' && k({ status: 400, message: 'x is not a valid model ID' }) === 'model', 'openrouter model errors');
+  ok(k({ status: 403, code: '403', message: 'Your input was flagged by moderation' }) === 'policy', 'moderation before generic 403');
+  ok(k({ code: 'no_free_model' }) === 'nofree' && k({ code: 'no_account' }) === 'account' && k({ code: 'no_image', message: 'I cannot' }) === 'noimage' && k({ code: 'no_key' }) === 'key', 'new local error codes');
+  ok(k({ status: 429, code: 'rate_limit_exceeded', message: 'Rate limit reached for requests per day (RPD)' }) === 'rate', 'a paid OpenAI rate limit is NOT mislabeled as free quota');
+  ok(k({ status: 403, message: 'Your organization must be verified' }) === 'verify' && k({ status: 401 }) === 'key', 'previous mappings intact');
+
+  // 설정 이전 / 멱등성
+  const app = { settings: { ai: { model: 'manual', custom: 'gpt-image-x', resolved: 'gpt-image-1.5', models: ['gpt-image-1.5'], quality: 'high', n: 2, consent: { base: 'https://api.openai.com/v1', ts: 1 } } } };
+  const c1 = aiConfig(app);
+  ok(c1 === aiConfig(app) && c1 === app.settings.ai, 'aiConfig returns the same live object');
+  ok(c1.p.openai.model === 'manual' && c1.p.openai.custom === 'gpt-image-x' && c1.p.openai.resolved === 'gpt-image-1.5' && c1.consents.openai === 'https://api.openai.com/v1' && c1.quality === 'high' && c1.n === 2, 'v1.1.0 settings migrated into p.openai / consents');
+  ok(!('model' in c1) && !('consent' in c1) && c1.provider === 'openai' && c1.feather === 30 && c1.tone === true, 'old keys removed, defaults filled');
+  const pcOr = pcfg(c1, 'openrouter');
+  ok(pcOr.model === 'auto' && Array.isArray(pcOr.models) && Array.isArray(pcOr.free) && pcfg(c1, 'openrouter') === pcOr, 'pcfg creates defaults once');
+  const app2 = { settings: {} };
+  ok(aiConfig(app2).provider === 'openai' && aiConfig(app2).p && aiConfig(app2).consents, 'fresh settings');
+  const app3 = { settings: { ai: { provider: 'nope' } } };
+  ok(aiConfig(app3).provider === 'openai', 'unknown provider falls back');
 }
 
 console.log(`\nAI unit tests: ${pass} passed, ${fail} failed`);

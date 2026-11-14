@@ -402,11 +402,13 @@ public class MainActivity extends Activity {
             return status(404, "Not Found");
         }
         byte[] b = ai.result(seg.get(1), idx);
-        if (b == null || b.length < 12) return status(404, "Not Found");
+        if (b == null || b.length < 2) return status(404, "Not Found");
         String mime = "application/octet-stream";
-        if ((b[0] & 0xff) == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G') mime = "image/png";
+        String rt = ai.resultType(seg.get(1));
+        if (rt != null) mime = rt;
+        else if (b.length >= 12 && (b[0] & 0xff) == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G') mime = "image/png";
         else if ((b[0] & 0xff) == 0xff && (b[1] & 0xff) == 0xd8) mime = "image/jpeg";
-        else if (b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F' && b[8] == 'W' && b[9] == 'E' && b[10] == 'B' && b[11] == 'P') mime = "image/webp";
+        else if (b.length >= 12 && b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F' && b[8] == 'W' && b[9] == 'E' && b[10] == 'B' && b[11] == 'P') mime = "image/webp";
         Map<String, String> h = new HashMap<String, String>();
         h.put("Cache-Control", "no-store");
         h.put("X-Content-Type-Options", "nosniff");
@@ -644,26 +646,18 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String aiInfo() {
-            try {
-                JSONObject o = new JSONObject();
-                o.put("v", 1);
-                o.put("hasKey", vault.hasKey());
-                o.put("hint", vault.hint());
-                o.put("base", vault.baseUrl());
-                return o.toString();
-            } catch (Throwable e) {
-                return "{\"v\":1,\"hasKey\":false}";
-            }
+            return vault.infoJson();
+        }
+
+        /** 제공자별 키 저장. key 가 비면 키는 유지하고 서버 주소(openai)/계정 ID(cloudflare)만 바꾼다. 성공 "OK" */
+        @JavascriptInterface
+        public String aiSetKey(String provider, String key, String base, String extra) {
+            return vault.set(provider, key, base, extra);
         }
 
         @JavascriptInterface
-        public String aiSetKey(String key, String base) {
-            return vault.set(key, base);
-        }
-
-        @JavascriptInterface
-        public void aiClearKey() {
-            vault.clear();
+        public void aiClearKey(String provider) {
+            vault.clear(provider);
         }
 
         @JavascriptInterface

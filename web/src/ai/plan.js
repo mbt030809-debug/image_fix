@@ -10,9 +10,10 @@ export const SIZES = [
   { w: 1024, h: 1536, str: '1024x1536', ar: 2 / 3 },
 ];
 
-export function pickSize(ar) {
-  let best = SIZES[0], bd = Infinity;
-  for (const s of SIZES) { const d = Math.abs(Math.log(ar / s.ar)); if (d < bd) { bd = d; best = s; } }
+/** 제공자별 크기 목록(sizes)에서 비율이 가장 가까운 것 (ar 이 없으면 w/h 로 계산) */
+export function pickSize(ar, sizes = SIZES) {
+  let best = sizes[0], bd = Infinity;
+  for (const s of sizes) { const d = Math.abs(Math.log(ar / (s.ar || s.w / s.h))); if (d < bd) { bd = d; best = s; } }
   return best;
 }
 
@@ -21,6 +22,7 @@ export const CONTEXTS = [0.15, 0.4, 0.9]; // 좁게 / 보통 / 넓게 (선택 �
 /**
  * bbox: 표시 영역 기준 0..1 정규화 {x0,y0,x1,y1}
  * full: 표시 영역의 작업 해상도 크기 {w,h} (px)
+ * opts: {context, minSide, sizes(제공자별 크기 목록)}
  * 반환: rect(full px 정수 사각형), size(제공 크기), fit(size 캔버스 안에서 rect 가 놓이는 위치/크기, 정수)
  */
 export function planRequest(bbox, full, opts = {}) {
@@ -31,7 +33,8 @@ export function planRequest(bbox, full, opts = {}) {
   let x0 = bx0 - m, y0 = by0 - m, x1 = bx1 + m, y1 = by1 + m;
   if (x1 - x0 < minSide) { const c = (x0 + x1) / 2; x0 = c - minSide / 2; x1 = c + minSide / 2; }
   if (y1 - y0 < minSide) { const c = (y0 + y1) / 2; y0 = c - minSide / 2; y1 = c + minSide / 2; }
-  const size = pickSize((x1 - x0) / (y1 - y0));
+  const sizes = opts.sizes || SIZES;
+  const size = pickSize((x1 - x0) / (y1 - y0), sizes);
   const ar = size.w / size.h;
   let rw = x1 - x0, rh = y1 - y0;
   if (rw / rh < ar) rw = rh * ar; else rh = rw / ar; // 짧은 쪽을 늘려 제공 비율에 맞춤 (더 많은 실제 문맥)

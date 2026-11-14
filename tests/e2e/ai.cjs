@@ -4,74 +4,7 @@ const path = require('path');
 const { launch, close, waitIdle } = require('./lib.cjs');
 const FIX = path.resolve(__dirname, '../fixtures');
 
-const init = () => {
-  let started = null;
-  try { started = sessionStorage.getItem('t_started'); sessionStorage.setItem('t_started', '1'); } catch (e) { /* noop */ }
-  let pending = started ? 0 : 1;
-  const ai = { key: null, base: 'https://api.openai.com/v1', hint: '' };
-  const S = window.__ai = { log: [], mode: 'ok', jobs: {}, results: {}, modelIds: ['gpt-4o', 'gpt-image-1', 'gpt-image-1.5', 'gpt-image-1-mini'], delay: 600, setKeyCalls: [] };
-  let seq = 0;
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const blobB64 = (blob) => new Promise((res) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.readAsDataURL(blob); });
-  async function run(id) {
-    const j = S.jobs[id];
-    if (j.spec.path === '/models') {
-      await sleep(40);
-      if (S.mode === 'e401') { j.state = 'error'; j.err = { status: 401, code: 'invalid_api_key', message: 'Incorrect API key provided' }; return; }
-      j.ids = S.modelIds; j.n = 0; j.state = 'done'; return;
-    }
-    const bin = atob(j.chunks.join('')); const u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-    const fd = await new Response(new Blob([u8]), { headers: { 'content-type': j.spec.type } }).formData();
-    const img = await createImageBitmap(fd.get('image')), msk = await createImageBitmap(fd.get('mask'));
-    const W = img.width, H = img.height;
-    const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d');
-    x.drawImage(msk, 0, 0); const md = x.getImageData(0, 0, W, H).data;
-    let tr = 0, x0 = W, y0 = H, x1 = -1, y1 = -1;
-    for (let p = 0; p < W * H; p++) if (md[p * 4 + 3] === 0) { tr++; const px = p % W, py = (p / W) | 0; if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py; }
-    S.log.push({ path: j.spec.path, type: j.spec.type, len: u8.length, model: fd.get('model'), size: fd.get('size'), quality: fd.get('quality'), n: +fd.get('n'), prompt: String(fd.get('prompt')), imgW: W, imgH: H, maskW: msk.width, maskH: msk.height, transparent: tr, bbox: [x0, y0, x1 + 1, y1 + 1], imgType: fd.get('image').type, imgName: fd.get('image').name });
-    // 지연(취소 가능)
-    const end = Date.now() + S.delay;
-    while (Date.now() < end) { if (j.cancelled) { j.state = 'cancelled'; return; } await sleep(40); }
-    if (j.cancelled) { j.state = 'cancelled'; return; }
-    if (S.mode === 'e401') { j.state = 'error'; j.err = { status: 401, code: 'invalid_api_key', message: 'Incorrect API key provided: sk-...1234' }; return; }
-    if (S.mode === 'e429') { j.state = 'error'; j.err = { status: 429, code: 'insufficient_quota', message: 'You exceeded your current quota' }; return; }
-    // 결과 생성: 편집 영역(마스크 alpha 0)은 변형별 색, 나머지는 원본 + 전역 밝기 drift(+6) 흉내
-    x.clearRect(0, 0, W, H); x.drawImage(img, 0, 0);
-    const od = x.getImageData(0, 0, W, H);
-    const n = +fd.get('n') || 1;
-    const outs = [];
-    for (let i = 0; i < n; i++) {
-      const o = new ImageData(new Uint8ClampedArray(od.data), W, H);
-      for (let p = 0; p < W * H; p++) {
-        if (md[p * 4 + 3] === 0) { o.data[p * 4] = 220 - 40 * i; o.data[p * 4 + 1] = 40; o.data[p * 4 + 2] = 200; }
-        else { o.data[p * 4] += 6; o.data[p * 4 + 1] += 6; o.data[p * 4 + 2] += 6; }
-        o.data[p * 4 + 3] = 255;
-      }
-      x.putImageData(o, 0, 0);
-      outs.push(await blobB64(await new Promise((r) => c.toBlob(r, 'image/png'))));
-    }
-    S.results[id] = outs; j.n = n; j.state = 'done';
-  }
-  window.Android = {
-    deviceInfo: () => JSON.stringify({ sdk: 34, memMB: 6000, camera: true, model: 'Fake' }),
-    pendingCount: () => pending, clearPending: () => { pending = 0; },
-    pickImages: () => {}, takePhoto: () => {}, setBars: () => {}, toast: () => {}, haptic: () => {}, keepScreenOn: () => {}, exit: () => {},
-    aiInfo: () => JSON.stringify({ v: 1, hasKey: !!ai.key, hint: ai.hint, base: ai.base }),
-    aiSetKey: (k, b) => { S.setKeyCalls.push([k ? 'key' : '', b]); if (b && !/^https:\/\//.test(b)) return 'ERR:badbase'; if (k) { ai.key = k; ai.hint = k.slice(0, 3) + '…' + k.slice(-4); } else if (!ai.key) return 'ERR:badkey'; if (b) ai.base = b; return 'OK'; },
-    aiClearKey: () => { ai.key = null; ai.hint = ''; },
-    aiBegin: (spec) => { const s = JSON.parse(spec); const id = 'a' + (++seq); S.jobs[id] = { spec: s, chunks: [], state: 'uploading' }; return id; },
-    aiChunk: (id, b64) => { S.jobs[id].chunks.push(b64); return true; },
-    aiSend: (id) => { S.jobs[id].state = 'running'; run(id).catch((e) => { S.jobs[id].state = 'error'; S.jobs[id].err = { status: 0, code: 'bad_response', message: String(e) }; }); return true; },
-    aiStatus: (id) => {
-      const j = S.jobs[id]; if (!j) return JSON.stringify({ state: 'error', status: 0, code: 'gone' });
-      if (j.state === 'done') return JSON.stringify({ state: 'done', n: j.n, ids: j.ids });
-      if (j.state === 'error') return JSON.stringify({ state: 'error', ...j.err });
-      return JSON.stringify({ state: j.state });
-    },
-    aiCancel: (id) => { if (S.jobs[id]) S.jobs[id].cancelled = true; },
-    aiRelease: (id) => { if (S.jobs[id]) S.jobs[id].released = true; },
-  };
-};
+const { init, installRoute, helpers } = require('./ai_lib.cjs');
 
 let HH = null;
 (async () => {
@@ -79,28 +12,12 @@ let HH = null;
   const { page } = h;
   let bad = 0;
   const check = (name, ok, extra = '') => { console.log((ok ? '  ✓ ' : '  ✗ ') + name + (extra ? ' ' + extra : '')); if (!ok) bad++; };
-  await page.route('**/__ai/**', async (route) => {
-    const m = /\/__ai\/([^/]+)\/(\d+)/.exec(route.request().url());
-    const b64 = m ? await page.evaluate(([id, i]) => (window.__ai.results[id] || [])[i], [m[1], +m[2]]) : null;
-    if (!b64) return route.fulfill({ status: 404, body: '' });
-    return route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from(b64, 'base64') });
-  });
+  await installRoute(page);
   await page.waitForFunction(() => window.imagefix && window.imagefix.editor.base && !window.imagefix.editor.busy, null, { timeout: 30000 });
   await waitIdle(page, 300);
 
-  // 사진 위 상대 좌표 → 화면 좌표
-  const pt = async (fx, fy) => page.evaluate(([fx, fy]) => { const r = window.imagefix.editor.view.photo.getBoundingClientRect(); return [r.left + r.width * fx, r.top + r.height * fy]; }, [fx, fy]);
-  const lasso = async () => {
-    const ring = [[0.40, 0.30], [0.51, 0.28], [0.62, 0.30], [0.66, 0.50], [0.62, 0.68], [0.51, 0.70], [0.40, 0.68], [0.36, 0.50], [0.40, 0.30]];
-    const P = []; for (const [a, b] of ring) P.push(await pt(a, b));
-    await page.mouse.move(P[0][0], P[0][1]); await page.mouse.down();
-    for (let i = 1; i < P.length; i++) { const [ax, ay] = P[i - 1], [bx, by] = P[i]; for (let s = 1; s <= 6; s++) await page.mouse.move(ax + ((bx - ax) * s) / 6, ay + ((by - ay) * s) / 6); }
-    await page.mouse.up(); await page.waitForTimeout(150);
-  };
-  const sel = () => page.evaluate(() => { const s = window.imagefix.editor.tool.selection(); let sum = 0; for (let i = 0; i < s.mask.length; i++) sum += s.mask[i]; const at = (fx, fy) => s.mask[Math.floor(fy * s.h) * s.w + Math.floor(fx * s.w)]; return { cov: sum / 255 / s.mask.length, center: at(0.51, 0.49), corner: at(0.1, 0.1), phase: s.phase }; });
-  const px = (fx, fy) => page.evaluate(([fx, fy]) => { const cv = window.imagefix.editor.view.photo; const d = cv.getContext('2d').getImageData(Math.floor(fx * cv.width), Math.floor(fy * cv.height), 1, 1).data; return [d[0], d[1], d[2]]; }, [fx, fy]);
-  const layers = () => page.evaluate(() => window.imagefix.editor.doc().layers.map((l) => ({ t: l.t, ai: l.ai ? { model: l.ai.model } : null, lock: !!l.lock, opacity: l.opacity, w: l.w, x: l.x, y: l.y, asset: l.asset })));
-  const phase = () => page.evaluate(() => window.imagefix.editor.tool && window.imagefix.editor.tool.selection().phase);
+  const { pt, lasso, sel, px, layers, phase } = helpers(page);
+  void phase;
 
   // ---------------------------------------------------------------- 1) 열기 + 올가미 선택
   console.log('▶ 선택');
@@ -147,7 +64,7 @@ let HH = null;
   check('consent dialog before the first request', (await page.locator('.dialog').count()) === 1 && /api\.openai\.com/.test(await page.locator('.dialog p').textContent()));
   await page.click('.dialog .btn >> text=동의하고 계속');
   await page.waitForFunction(() => window.imagefix.editor.tool && window.imagefix.editor.tool.selection().phase === 'busy', null, { timeout: 5000 });
-  await page.waitForTimeout(300);
+  await page.waitForSelector('.ai-sent', { timeout: 15000 }); // 이미지 준비가 끝나 "보낸 이미지"가 보일 때까지
   await h.shot('a3_busy');
   check('busy state shows sent image preview + cancel', (await page.locator('.ai-sent').count()) === 1 && (await page.locator('.sheet-head .btn >> text=취소').count()) === 1);
   await page.waitForFunction(() => window.imagefix.editor.tool.selection().phase === 'review', null, { timeout: 20000 });

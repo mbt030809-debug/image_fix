@@ -35,26 +35,43 @@ public class AiClientTest {
     }
 
     static class Cfg implements AiClient.Config {
-        String base, key;
+        final java.util.Map<String, String> bases = new java.util.HashMap<String, String>();
+        final java.util.Map<String, String> keys = new java.util.HashMap<String, String>();
+        final java.util.Map<String, String> extras = new java.util.HashMap<String, String>();
 
         Cfg(String base, String key) {
-            this.base = base;
-            this.key = key;
+            bases.put("openai", base);
+            keys.put("openai", key);
+        }
+
+        Cfg with(String provider, String base, String key, String extra) {
+            bases.put(provider, base);
+            keys.put(provider, key);
+            if (extra != null) extras.put(provider, extra);
+            return this;
         }
 
         @Override
-        public String baseUrl() {
-            return base;
+        public String baseUrl(String provider) {
+            String b = bases.get(provider);
+            return b != null ? b : "https://invalid.example";
         }
 
         @Override
-        public String apiKey() {
-            return key;
+        public String apiKey(String provider) {
+            return keys.get(provider);
+        }
+
+        @Override
+        public String extra(String provider) {
+            String e = extras.get(provider);
+            return e == null ? "" : e;
         }
     }
 
     static final AtomicReference<byte[]> lastBody = new AtomicReference<byte[]>();
     static final AtomicReference<Headers> lastHeaders = new AtomicReference<Headers>();
+    static final AtomicReference<String> lastPath = new AtomicReference<String>();
     static final AtomicInteger evilHits = new AtomicInteger();
     static final byte[] IMG_A = new byte[]{(byte) 0x89, 'P', 'N', 'G', 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
     static final byte[] IMG_B = new byte[]{(byte) 0x89, 'P', 'N', 'G', 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9};
@@ -117,6 +134,45 @@ public class AiClientTest {
                             // 클라이언트가 끊음
                         }
                         reply(x, 200, "{\"data\":[]}");
+                    } else if (p.equals("/or/api/v1/chat/completions")) {
+                        lastBody.set(body);
+                        lastHeaders.set(x.getRequestHeaders());
+                        lastPath.set(p);
+                        reply(x, 200, "{\"id\":\"gen-1\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\",\"images\":[{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,AAAA\"}}]}}]}");
+                    } else if (p.equals("/or/api/v1/models")) {
+                        lastHeaders.set(x.getRequestHeaders());
+                        lastPath.set(p + "?" + x.getRequestURI().getRawQuery());
+                        reply(x, 200, "{\"data\":[{\"id\":\"a/b:free\",\"architecture\":{\"output_modalities\":[\"image\",\"text\"]},\"pricing\":{\"prompt\":\"0\"}}]}");
+                    } else if (p.equals("/or/api/v1/key")) {
+                        lastHeaders.set(x.getRequestHeaders());
+                        reply(x, 200, "{\"data\":{\"label\":\"k\",\"is_free_tier\":true}}");
+                    } else if (p.equals("/orerr/api/v1/chat/completions")) {
+                        reply(x, 429, "{\"error\":{\"code\":429,\"message\":\"Rate limit exceeded: free-models-per-day\",\"metadata\":{\"raw\":\"upstream details\"}}}");
+                    } else if (p.equals("/or402/api/v1/chat/completions")) {
+                        reply(x, 402, "{\"error\":{\"code\":402,\"message\":\"Insufficient credits\"}}");
+                    } else if (p.startsWith("/cf/client/v4/accounts/") && p.contains("/ai/run/")) {
+                        lastBody.set(body);
+                        lastHeaders.set(x.getRequestHeaders());
+                        lastPath.set(p);
+                        reply(x, 200, "{\"result\":{\"image\":\"QUJD\"},\"success\":true,\"errors\":[],\"messages\":[]}");
+                    } else if (p.startsWith("/cf/client/v4/accounts/") && p.endsWith("/ai/models/search")) {
+                        lastHeaders.set(x.getRequestHeaders());
+                        lastPath.set(p + "?" + x.getRequestURI().getRawQuery());
+                        reply(x, 200, "{\"result\":[{\"name\":\"@cf/black-forest-labs/flux-2-klein-4b\"}],\"success\":true}");
+                    } else if (p.startsWith("/cferr/client/v4/")) {
+                        reply(x, 429, "{\"success\":false,\"errors\":[{\"code\":3036,\"message\":\"you have used up your daily free allocation of 10,000 neurons\"}],\"messages\":[],\"result\":null}");
+                    } else if (p.startsWith("/cfbin/client/v4/")) {
+                        byte[] png = IMG_A;
+                        x.getResponseHeaders().add("Content-Type", "image/png");
+                        x.sendResponseHeaders(200, png.length);
+                        x.getResponseBody().write(png);
+                        x.close();
+                    } else if (p.startsWith("/cfhtml/client/v4/")) {
+                        byte[] hb = "<html>x</html>".getBytes(UTF8);
+                        x.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+                        x.sendResponseHeaders(200, hb.length);
+                        x.getResponseBody().write(hb);
+                        x.close();
                     } else {
                         reply(x, 404, "{}");
                     }
@@ -225,6 +281,88 @@ public class AiClientTest {
         cs.cancel(sid2);
         ok("cancelled".equals(new JSONObject(cs.status(sid2)).getString("state")) && !cs.send(sid2), "cancel before send → cancelled, cannot send");
 
+        // ---------------------------------------------------------------- 제공자 프로필 (openrouter / cloudflare)
+        System.out.println("▶ AiClient providers");
+        String ACC = "0123456789abcdef0123456789abcdef";
+        Cfg pc = new Cfg(root + "/ok/v1", "sk-openai-111111").with("openrouter", root + "/or/api/v1", "sk-or-v1-222222", null).with("cloudflare", root + "/cf/client/v4", "cf-token-333333", ACC);
+        AiClient cp = new AiClient(pc);
+        String MP = "multipart/form-data; boundary=----X1";
+        ok("ERR:provider".equals(cp.begin("{\"provider\":\"gemini\",\"method\":\"GET\",\"path\":\"/models\"}")), "unknown provider rejected");
+        ok("ERR:path".equals(cp.begin("{\"provider\":\"openrouter\",\"method\":\"POST\",\"path\":\"/images/edits\",\"type\":\"" + MP + "\",\"len\":3}")), "openrouter: images/edits not allowed");
+        ok("ERR:type".equals(cp.begin("{\"provider\":\"openrouter\",\"method\":\"POST\",\"path\":\"/chat/completions\",\"type\":\"" + MP + "\",\"len\":3}")), "openrouter: chat requires json");
+        ok("ERR:path".equals(cp.begin("{\"provider\":\"openai\",\"method\":\"POST\",\"path\":\"/chat/completions\",\"type\":\"application/json\",\"len\":3}")), "openai: chat/completions not allowed");
+        ok("ERR:path".equals(cp.begin("{\"provider\":\"cloudflare\",\"method\":\"POST\",\"path\":\"/accounts/0123456789abcdef0123456789abcdef/ai/run/@cf/a/b\",\"type\":\"application/json\",\"len\":3}")), "cloudflare: literal account id not allowed (must use {account})");
+        ok("ERR:path".equals(cp.begin("{\"provider\":\"cloudflare\",\"method\":\"POST\",\"path\":\"/accounts/{account}/ai/run/@cf/../b\",\"type\":\"application/json\",\"len\":3}")), "cloudflare: traversal rejected");
+        ok("ERR:path".equals(cp.begin("{\"provider\":\"cloudflare\",\"method\":\"POST\",\"path\":\"/accounts/{account}/ai/run/@hf/a/b\",\"type\":\"application/json\",\"len\":3}")), "cloudflare: only @cf models");
+        ok("ERR:path".equals(cp.begin("{\"provider\":\"openrouter\",\"method\":\"GET\",\"path\":\"/models?a=b c\"}")), "query with illegal chars rejected");
+        ok("ERR:path".equals(cp.begin("{\"provider\":\"openrouter\",\"method\":\"GET\",\"path\":\"/credits\"}")), "openrouter: other paths rejected");
+        ok(cp.jobCount() == 0, "rejected provider begins leave no jobs");
+
+        // OpenRouter: JSON 본문 → raw 응답 (+ X-Title, 제공자별 키)
+        byte[] jbody = "{\"model\":\"a/b:free\",\"messages\":[{\"role\":\"user\",\"content\":\"한글\"}],\"modalities\":[\"image\",\"text\"]}".getBytes(UTF8);
+        String oid = cp.begin("{\"provider\":\"openrouter\",\"method\":\"POST\",\"path\":\"/chat/completions\",\"type\":\"application/json\",\"len\":" + jbody.length + "}");
+        ok(oid.startsWith("a"), "openrouter begin ok");
+        cp.chunk(oid, Base64.getEncoder().encodeToString(jbody));
+        ok(cp.send(oid), "openrouter send");
+        JSONObject ost = waitDone(cp, oid, 6000);
+        ok("done".equals(ost.optString("state")) && ost.optBoolean("raw") && "application/json".equals(ost.optString("ctype")) && ost.optInt("n") == 1, "openrouter raw done: " + ost);
+        Headers oh = lastHeaders.get();
+        ok(oh != null && "Bearer sk-or-v1-222222".equals(oh.getFirst("Authorization")) && "ImageFix".equals(oh.getFirst("X-Title")) && "application/json".equals(oh.getFirst("Content-Type")), "openrouter headers (own key, X-Title, json)");
+        ok(Arrays.equals(lastBody.get(), jbody), "openrouter body forwarded intact (UTF-8)");
+        ok("/or/api/v1/chat/completions".equals(lastPath.get()), "openrouter path = base + route");
+        String rj = new String(cp.result(oid, 0), UTF8);
+        ok(new JSONObject(rj).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getJSONArray("images").length() == 1 && "application/json".equals(cp.resultType(oid)), "openrouter raw body returned unmodified");
+        cp.release(oid);
+
+        String mid2 = cp.begin("{\"provider\":\"openrouter\",\"method\":\"GET\",\"path\":\"/models?output_modalities=image\"}");
+        cp.send(mid2);
+        JSONObject mst = waitDone(cp, mid2, 6000);
+        ok("done".equals(mst.optString("state")) && mst.optBoolean("raw") && "/or/api/v1/models?output_modalities=image".equals(lastPath.get()), "openrouter models raw + query passed: " + mst + " " + lastPath.get());
+        ok(new JSONObject(new String(cp.result(mid2, 0), UTF8)).getJSONArray("data").length() == 1, "openrouter models json");
+        String kid = cp.begin("{\"provider\":\"openrouter\",\"method\":\"GET\",\"path\":\"/key\"}");
+        cp.send(kid);
+        ok("done".equals(waitDone(cp, kid, 6000).optString("state")), "openrouter /key");
+
+        // Cloudflare: {account} 치환 + multipart + JSON 응답
+        byte[] cbody = new byte[50 * 1024];
+        new Random(3).nextBytes(cbody);
+        String cid = cp.begin("{\"provider\":\"cloudflare\",\"method\":\"POST\",\"path\":\"/accounts/{account}/ai/run/@cf/black-forest-labs/flux-2-klein-4b\",\"type\":\"" + MP + "\",\"len\":" + cbody.length + "}");
+        ok(cid.startsWith("a"), "cloudflare begin ok");
+        cp.chunk(cid, Base64.getEncoder().encodeToString(cbody));
+        cp.send(cid);
+        JSONObject cst2 = waitDone(cp, cid, 6000);
+        ok("done".equals(cst2.optString("state")) && cst2.optBoolean("raw"), "cloudflare raw done: " + cst2);
+        ok(("/cf/client/v4/accounts/" + ACC + "/ai/run/@cf/black-forest-labs/flux-2-klein-4b").equals(lastPath.get()), "cloudflare {account} replaced with stored id: " + lastPath.get());
+        ok("Bearer cf-token-333333".equals(lastHeaders.get().getFirst("Authorization")) && MP.equals(lastHeaders.get().getFirst("Content-Type")) && Arrays.equals(lastBody.get(), cbody), "cloudflare headers/body");
+        ok("QUJD".equals(new JSONObject(new String(cp.result(cid, 0), UTF8)).getJSONObject("result").getString("image")), "cloudflare json result");
+        String sid3 = cp.begin("{\"provider\":\"cloudflare\",\"method\":\"GET\",\"path\":\"/accounts/{account}/ai/models/search?per_page=50&search=flux\"}");
+        cp.send(sid3);
+        ok("done".equals(waitDone(cp, sid3, 6000).optString("state")) && lastPath.get().endsWith("/ai/models/search?per_page=50&search=flux"), "cloudflare models/search with query");
+
+        // 계정 ID 없음 / 잘못됨
+        Cfg noAcc = new Cfg(root + "/ok/v1", "k").with("cloudflare", root + "/cf/client/v4", "cf-token-333333", "");
+        expectErrorWith(new AiClient(noAcc), "cloudflare", "/accounts/{account}/ai/run/@cf/a/b", 0, "no_account", "");
+
+        // 오류 형식: OpenRouter(숫자 code + metadata.raw), Cloudflare(errors[]), 402
+        expectErrorWith(new AiClient(new Cfg("x", "x").with("openrouter", root + "/orerr/api/v1", "sk-or-v1-222222", null)), "openrouter", "/chat/completions", 429, "429", "free-models-per-day | upstream details");
+        expectErrorWith(new AiClient(new Cfg("x", "x").with("openrouter", root + "/or402/api/v1", "sk-or-v1-222222", null)), "openrouter", "/chat/completions", 402, "402", "Insufficient credits");
+        expectErrorWith(new AiClient(new Cfg("x", "x").with("cloudflare", root + "/cferr/client/v4", "cf-token-333333", ACC)), "cloudflare", "/accounts/{account}/ai/run/@cf/a/b", 429, "cf_3036", "daily free allocation");
+
+        // 바이너리 이미지 응답(raw) / 허용되지 않은 Content-Type
+        AiClient cbin = new AiClient(new Cfg("x", "x").with("cloudflare", root + "/cfbin/client/v4", "cf-token-333333", ACC));
+        String bid = cbin.begin("{\"provider\":\"cloudflare\",\"method\":\"POST\",\"path\":\"/accounts/{account}/ai/run/@cf/runwayml/sd\",\"type\":\"application/json\",\"len\":2}");
+        cbin.chunk(bid, Base64.getEncoder().encodeToString(new byte[]{'{', '}'}));
+        cbin.send(bid);
+        JSONObject bst = waitDone(cbin, bid, 6000);
+        ok("done".equals(bst.optString("state")) && "image/png".equals(bst.optString("ctype")) && Arrays.equals(cbin.result(bid, 0), IMG_A), "binary png response kept as raw: " + bst);
+        AiClient chtml = new AiClient(new Cfg("x", "x").with("cloudflare", root + "/cfhtml/client/v4", "cf-token-333333", ACC));
+        String hid = chtml.begin("{\"provider\":\"cloudflare\",\"method\":\"POST\",\"path\":\"/accounts/{account}/ai/run/@cf/runwayml/sd\",\"type\":\"application/json\",\"len\":2}");
+        chtml.chunk(hid, Base64.getEncoder().encodeToString(new byte[]{'{', '}'}));
+        chtml.send(hid);
+        waitDone(chtml, hid, 6000);
+        ok("application/octet-stream".equals(chtml.resultType(hid)), "unexpected content-type is not trusted (octet-stream)");
+        ok(AiClient.validAccount(ACC) && !AiClient.validAccount("ABCDEF0123456789abcdef0123456789") && !AiClient.validAccount("short") && !AiClient.validAccount(null), "account id validation");
+
         srv.stop(0);
         System.out.println("\nJVM tests: " + pass + " passed, " + fail + " failed");
         System.exit(fail == 0 ? 0 : 1);
@@ -247,6 +385,17 @@ public class AiClientTest {
 
     static JSONObject waitFinal(AiClient c, String id, long ms) throws Exception {
         return waitDone(c, id, ms);
+    }
+
+
+    static void expectErrorWith(AiClient c, String provider, String path, int status, String code, String msgPart) throws Exception {
+        String id = c.begin("{\"provider\":\"" + provider + "\",\"method\":\"POST\",\"path\":\"" + path + "\",\"type\":\"application/json\",\"len\":2}");
+        c.chunk(id, Base64.getEncoder().encodeToString(new byte[]{'{', '}'}));
+        c.send(id);
+        JSONObject o = waitDone(c, id, 8000);
+        boolean good = "error".equals(o.optString("state")) && o.optInt("status", -1) == status && code.equals(o.optString("code")) && o.optString("message").contains(msgPart);
+        ok(good, "provider error mapping " + provider + " " + code + " → " + o);
+        c.release(id);
     }
 
     static void expectError(String base, String key, int status, String code, String msgPart, String label) throws Exception {

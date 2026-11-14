@@ -10,7 +10,7 @@ import { toast, openModal, Segmented, Switch, Chips, Btn, Slider, handleBack, co
 import { openAiSettings, aiConfig } from './tools/aisettings.js';
 
 const SETTINGS_KEY = 'imagefix.settings';
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 async function decodeFile(file) {
   const opts = { imageOrientation: 'from-image', premultiplyAlpha: 'none', colorSpaceConversion: 'default' };
@@ -126,8 +126,8 @@ export class App {
         h('p', { class: 'sheet-note' }, t('높을수록 선명하지만 메모리를 더 써요. 보통은 자동을 권장해요.', 'Higher is sharper but uses more memory. Auto is recommended.')),
         motion.el, grid.el, stats.el,
         h('div', { class: 'sheet-sec' }, t('AI 수정', 'AI edit')),
-        h('p', { class: 'sheet-note' }, bridge.ai.available() ? t('내 OpenAI API 키로 선택한 영역만 AI 에 맡겨요. 키는 기기에 암호화돼 저장돼요.', 'Send only a selected area to AI using your own OpenAI API key. The key is stored encrypted on this device.') : t('AI 수정은 앱(APK)에서만 쓸 수 있어요.', 'AI edit works only in the app (APK).')),
-        bridge.ai.available() ? Btn(t('AI 설정 (키·모델)', 'AI settings (key · model)'), 'tonal', () => openAiSettings(this), 'key-round') : null,
+        h('p', { class: 'sheet-note' }, bridge.ai.available() ? t('내 API 키(OpenAI·OpenRouter·Cloudflare)로 선택한 영역만 AI 에 맡겨요. 무료로 쓸 수 있는 옵션도 있어요. 키는 기기에 암호화돼 저장돼요.', 'Send only a selected area to AI using your own API key (OpenAI, OpenRouter or Cloudflare). Free options are available. The key is stored encrypted on this device.') : t('AI 수정은 앱(APK)에서만 쓸 수 있어요.', 'AI edit works only in the app (APK).')),
+        bridge.ai.available() ? Btn(t('AI 설정 (제공자·키·모델)', 'AI settings (provider · key · model)'), 'tonal', () => openAiSettings(this), 'key-round') : null,
         h('div', { class: 'sheet-sec' }, t('정보', 'About')),
         h('div', { class: 'kv' }, h('span', null, t('버전', 'Version')), h('b', null, VERSION)),
         h('p', { class: 'sheet-note' }, t('아이콘: Lucide (ISC), 폰트: SIL OFL 1.1. 인터넷 권한은 AI 수정에만 쓰여요. AI 수정을 쓰지 않으면 사진은 기기 밖으로 나가지 않아요.', 'Icons: Lucide (ISC), fonts: SIL OFL 1.1. The internet permission is used only by AI edit. If you never use AI edit, your photos never leave the device.')));

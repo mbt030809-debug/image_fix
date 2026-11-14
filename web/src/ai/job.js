@@ -1,26 +1,50 @@
-// AI 편집 작업(DOM 필요): 선택 영역 → 요청 이미지/마스크 준비 → 결과 패치(선택 안쪽만 보이는 RGBA 캔버스) 생성
+// AI 편집 작업(DOM 필요): 선택 영역 → 요청 이미지/마스크(또는 표시 이미지) 준비 → 결과 패치(선택 안쪽만 보이는 RGBA 캔버스) 생성
 import { orientedSize } from '../engine/geometry.js';
-import { bboxOf, sampleMask, featherU8 } from './selection.js';
-import { planRequest, rectToCrop, placeInCanvas, apiMaskRGBA, toneOffsets, buildPatch, featherSigma, layerPlacement, CONTEXTS } from './plan.js';
+import { bboxOf, sampleMask, featherU8, contourSegments } from './selection.js';
+import { planRequest, rectToCrop, placeInCanvas, apiMaskRGBA, toneOffsets, buildPatch, featherSigma, layerPlacement, CONTEXTS, SIZES } from './plan.js';
 
 const toBlob = (cv, type = 'image/png') => new Promise((res, rej) => cv.toBlob((b) => (b ? res(b) : rej(new Error('encode failed'))), type));
 const mkCanvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
 
+/** 요청 이미지에 선택 영역을 마젠타로 표시한 복사본 (마스크가 없는 모델에게 "여기를 고쳐" 라고 알려 주는 두 번째 이미지) */
+export function markedCanvas(cv, selFull, size) {
+  const m = mkCanvas(size.w, size.h);
+  const x = m.getContext('2d');
+  x.drawImage(cv, 0, 0);
+  const tint = mkCanvas(size.w, size.h);
+  const id = new ImageData(size.w, size.h);
+  for (let i = 0; i < selFull.length; i++) { const a = selFull[i]; if (a) { id.data[i * 4] = 255; id.data[i * 4 + 1] = 0; id.data[i * 4 + 2] = 255; id.data[i * 4 + 3] = a * 0.45; } }
+  tint.getContext('2d').putImageData(id, 0, 0);
+  x.drawImage(tint, 0, 0);
+  const segs = contourSegments(selFull, size.w, size.h);
+  x.strokeStyle = '#ff00ff'; x.lineWidth = Math.max(2, Math.round(Math.max(size.w, size.h) * 0.004)); x.lineJoin = 'round'; x.lineCap = 'round';
+  x.beginPath();
+  for (let i = 0; i < segs.length; i += 4) { x.moveTo(segs[i], segs[i + 1]); x.lineTo(segs[i + 2], segs[i + 3]); }
+  x.stroke();
+  return m;
+}
+
 /**
- * ed: Editor, sel: {mask, w, h} (격자 마스크, 표시 영역 기준), opts: {ctx: 0..2, feather: 0..100}
- * 반환: 요청에 필요한 모든 것 (imageBlob, maskBlob, size, fit, rect, …)
+ * ed: Editor, sel: {mask, w, h} (격자 마스크, 표시 영역 기준), opts: {ctx: 0..2, feather: 0..100, provider: 제공자(sizes/usesMask)}
+ * 반환: 요청에 필요한 모든 것 (imageBlob, maskBlob | markedBlob, size, fit, rect, …)
  */
 export async function prepareRequest(ed, sel, opts) {
+  const P = opts.provider || { sizes: SIZES, usesMask: true };
   const bb = bboxOf(sel.mask, sel.w, sel.h);
   if (!bb) throw new Error('empty selection');
   const doc = ed.doc(), info = ed.info;
   const [Wo, Ho] = orientedSize(info.w, info.h, doc.geo);
   const crop = doc.geo.crop;
   const full = { w: crop[2] * Wo, h: crop[3] * Ho };
-  const plan = planRequest({ x0: bb.x0 / sel.w, y0: bb.y0 / sel.h, x1: bb.x1 / sel.w, y1: bb.y1 / sel.h }, full, { context: CONTEXTS[opts.ctx == null ? 1 : opts.ctx] });
+  const plan = planRequest({ x0: bb.x0 / sel.w, y0: bb.y0 / sel.h, x1: bb.x1 / sel.w, y1: bb.y1 / sel.h }, full, { context: CONTEXTS[opts.ctx == null ? 1 : opts.ctx], sizes: P.sizes });
   const { rect, size, fit } = plan;
-  const selFit = sampleMask(sel.mask, sel.w, sel.h, { x: (rect.x / full.w) * sel.w, y: (rect.y / full.h) * sel.h, w: (rect.w / full.w) * sel.w, h: (rect.h / full.h) * sel.h }, fit.w, fit.h);
+  const gridRect = { x: (rect.x / full.w) * sel.w, y: (rect.y / full.h) * sel.h, w: (rect.w / full.w) * sel.w, h: (rect.h / full.h) * sel.h };
+  const selFit = sampleMask(sel.mask, sel.w, sel.h, gridRect, fit.w, fit.h);
   const selFull = placeInCanvas(selFit, size, fit);
+  // 출력 해상도가 요청 해상도와 다른 제공자(예: Cloudflare 입력 512 → 출력 1024): 패치는 출력 해상도로 만든다
+  const kx = size.out ? size.out.w / size.w : 1, ky = size.out ? size.out.h / size.h : 1;
+  const fitO = size.out ? { x: Math.round(fit.x * kx), y: Math.round(fit.y * ky), w: Math.max(1, Math.round(fit.w * kx)), h: Math.max(1, Math.round(fit.h * ky)) } : fit;
+  const selFitO = size.out ? sampleMask(sel.mask, sel.w, sel.h, gridRect, fitO.w, fitO.h) : selFit;
 
   // 영역을 작업 해상도로 합성(보정 + 레이어 + 배경, 프레임 제외)
   const region = await ed.renderRegion(rectToCrop(rect, full, crop), Math.max(fit.w, fit.h));
@@ -35,30 +59,46 @@ export async function prepareRequest(ed, sel, opts) {
   const origData = c.getImageData(0, 0, size.w, size.h);
   const sigmaReq = featherSigma(opts.feather == null ? 30 : opts.feather, full, plan.k);
   const dil = Math.max(3, Math.min(Math.round(0.04 * Math.max(size.w, size.h)), Math.round(sigmaReq * 2) + 3));
-  const maskRGBA = apiMaskRGBA(selFull, size, dil);
-  const mcv = mkCanvas(size.w, size.h);
-  mcv.getContext('2d').putImageData(new ImageData(maskRGBA, size.w, size.h), 0, 0);
-  const [imageBlob, maskBlob] = await Promise.all([toBlob(cv), toBlob(mcv)]);
+  const imageBlob = await toBlob(cv);
+  let maskBlob = null, markedBlob = null;
+  if (P.usesMask) {
+    const maskRGBA = apiMaskRGBA(selFull, size, dil);
+    const mcv = mkCanvas(size.w, size.h);
+    mcv.getContext('2d').putImageData(new ImageData(maskRGBA, size.w, size.h), 0, 0);
+    maskBlob = await toBlob(mcv);
+  } else {
+    markedBlob = await toBlob(markedCanvas(cv, selFull, size));
+  }
   const place = layerPlacement(rect, full, crop, Wo, Ho);
-  return { plan, size, fit, rect, full, crop, selFit, selFull, origData, imageBlob, maskBlob, preview: cv, dil, place };
+  return { plan, size, fit, fitO, rect, full, crop, selFit, selFitO, selFull, origData, imageBlob, maskBlob, markedBlob, preview: cv, dil, place, kx, ky };
 }
 
-/** AI 결과 PNG → 패치 캔버스(fit 크기, alpha = 부드러운 선택 마스크). opts: {feather, tone} */
+/** AI 결과 이미지 → 패치 캔버스(fitO 크기, alpha = 부드러운 선택 마스크). opts: {feather, tone} */
 export async function makePatch(blob, prep, opts) {
-  const { size, fit, plan } = prep;
+  const { size, fit, fitO, plan, kx, ky } = prep;
   const bmp = await createImageBitmap(blob);
-  const cv = mkCanvas(size.w, size.h);
-  const c = cv.getContext('2d', { willReadFrequently: true });
-  c.imageSmoothingQuality = 'high';
-  c.drawImage(bmp, 0, 0, size.w, size.h);
+  const S = mkCanvas(size.w, size.h);
+  const sc = S.getContext('2d', { willReadFrequently: true });
+  sc.imageSmoothingQuality = 'high';
+  sc.drawImage(bmp, 0, 0, size.w, size.h);
+  const aiS = sc.getImageData(0, 0, size.w, size.h).data;
+  const out = size.out || size;
+  let aiO = aiS;
+  if (size.out) {
+    const O = mkCanvas(out.w, out.h);
+    const oc = O.getContext('2d', { willReadFrequently: true });
+    oc.imageSmoothingQuality = 'high';
+    oc.drawImage(bmp, 0, 0, out.w, out.h);
+    aiO = oc.getImageData(0, 0, out.w, out.h).data;
+  }
   if (bmp.close) bmp.close();
-  const ai = c.getImageData(0, 0, size.w, size.h).data;
-  const off = opts.tone === false ? null : toneOffsets(ai, prep.origData.data, prep.selFull, size, fit, prep.dil + 2);
-  const sigma = featherSigma(opts.feather == null ? 30 : opts.feather, prep.full, plan.k);
-  const alpha = featherU8(prep.selFit, fit.w, fit.h, sigma);
-  const patch = buildPatch(ai, size, fit, alpha, off);
-  const pc = mkCanvas(fit.w, fit.h);
-  pc.getContext('2d').putImageData(new ImageData(patch, fit.w, fit.h), 0, 0);
+  const off = opts.tone === false ? null : toneOffsets(aiS, prep.origData.data, prep.selFull, size, fit, prep.dil + 2);
+  const sigma = featherSigma(opts.feather == null ? 30 : opts.feather, prep.full, plan.k) * kx;
+  const alpha = featherU8(prep.selFitO, fitO.w, fitO.h, sigma);
+  const patch = buildPatch(aiO, out, fitO, alpha, off);
+  const pc = mkCanvas(fitO.w, fitO.h);
+  pc.getContext('2d').putImageData(new ImageData(patch, fitO.w, fitO.h), 0, 0);
+  void ky;
   return pc;
 }
 

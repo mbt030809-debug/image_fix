@@ -7,10 +7,11 @@ import { Segmented, Chips, Slider, Btn, IconBtn, toast, confirmDialog } from '..
 import { bridge } from '../bridge.js';
 import * as Drafts from '../drafts.js';
 import { newMask, rasterPolygon, rectPts, ellipsePts, combine, strokeOp, invertMask, bboxOf, growMask, contourSegments } from '../ai/selection.js';
-import { buildEditRequest, explainError } from '../ai/openai.js';
-import { editImage, AiError } from '../ai/client.js';
+import { explainError } from '../ai/openai.js';
+import { AiError } from '../ai/client.js';
+import { PROVIDERS, getProvider } from '../ai/providers.js';
 import { prepareRequest, makePatch, sentPreview } from '../ai/job.js';
-import { aiConfig, resolveModel, openAiSettings, privacyNote } from './aisettings.js';
+import { aiConfig, pcfg, resolveModel, openAiSettings, privacyNote, providerInfo, providerReady } from './aisettings.js';
 
 const PRESETS = [
   { id: 'erase', ko: '물체 지우기', en: 'Remove object', pko: '선택한 부분의 물체를 지우고 주변 배경과 자연스럽게 이어 주세요.', pen: 'Remove the object in the selected area and fill it naturally to match the surrounding background.' },
@@ -40,6 +41,7 @@ export function open(ed, body) {
   let undoBtn = null, invBtn = null, clrBtn = null;
   let promptEl = null;
 
+  const prov = () => getProvider(cfg.provider);
   const note = (s) => h('p', { class: 'sheet-note' }, s);
   const sec = (s) => h('div', { class: 'sheet-sec' }, s);
   const save = () => ed.app.saveSettings();
@@ -218,17 +220,31 @@ export function open(ed, body) {
     promptEl.value = S.prompt;
     promptEl.addEventListener('input', () => { S.prompt = promptEl.value; });
     const presets = Chips({ label: t('예시 문구', 'Examples'), items: PRESETS.map((p) => ({ id: p.id, label: t(p.ko, p.en) })), onSelect: (id) => { const p = PRESETS.find((x) => x.id === id); S.prompt = t(p.pko, p.pen); promptEl.value = S.prompt; promptEl.focus(); } });
+    const P = prov();
     const quality = Segmented({ label: t('품질', 'Quality'), items: [{ id: 'low', label: t('빠름', 'Fast') }, { id: 'medium', label: t('보통', 'Normal') }, { id: 'high', label: t('고품질', 'High') }], value: cfg.quality, onChange: (v) => { cfg.quality = v; save(); } });
-    const count = Segmented({ label: t('생성 개수', 'Variants'), items: [1, 2, 3].map((n) => ({ id: String(n), label: String(n) })), value: String(cfg.n), onChange: (v) => { cfg.n = +v; save(); } });
+    const count = Segmented({ label: t('생성 개수', 'Variants'), items: [1, 2, 3].filter((n) => n <= P.maxN).map((n) => ({ id: String(n), label: String(n) })), value: String(Math.min(cfg.n, P.maxN)), onChange: (v) => { cfg.n = +v; save(); } });
     const ctx = Segmented({ label: t('주변 포함', 'Context'), items: [{ id: '0', label: t('좁게', 'Tight') }, { id: '1', label: t('보통', 'Normal') }, { id: '2', label: t('넓게', 'Wide') }], value: String(cfg.ctx), onChange: (v) => { cfg.ctx = +v; save(); } });
-    if (S.msg) body.append(h('p', { class: 'ai-msg err', role: 'alert' }, S.msg.text), S.msg.settings ? Btn(t('AI 설정 열기', 'Open AI settings'), 'tonal', () => openAiSettings(ed.app, { onClose: renderBody }), 'key-round') : null);
-    const info = bridge.ai.info();
-    if (bridge.ai.available() && !(info && info.hasKey)) body.append(h('div', { class: 'ai-setup' }, note(t('AI 수정을 쓰려면 OpenAI API 키가 필요해요.', 'AI edit needs an OpenAI API key.')), Btn(t('API 키 설정', 'Set up API key'), 'tonal', () => openAiSettings(ed.app, { onClose: renderBody }), 'key-round')));
-    body.append(promptEl, presets.el,
-      sec(t('품질', 'Quality')), quality.el, sec(t('생성 개수 (개수만큼 요금이 늘어요)', 'Variants (cost grows with the count)')), count.el,
-      sec(t('주변 포함 (넓을수록 어울리게 만들지만 결과가 덜 선명할 수 있어요)', 'Context (wider blends better but may look softer)')), ctx.el,
-      note(t('선택 영역과 주변만 전송하고, 결과는 선택 안쪽에만 합쳐져요. 취소해도 이미 시작된 요청은 요금이 청구될 수 있어요.', 'Only the selected area and its surroundings are sent, and the result is blended only inside your selection. Cancelling may not avoid charges for a request already started.')),
-      Btn(t('AI 설정', 'AI settings'), 'text', () => openAiSettings(ed.app, { onClose: renderBody }), 'key-round'));
+    const openSet = (pid) => openAiSettings(ed.app, { provider: pid, onClose: renderBody });
+    if (S.msg) body.append(h('p', { class: 'ai-msg err', role: 'alert' }, S.msg.text), S.msg.settings ? Btn(t('AI 설정 열기', 'Open AI settings'), 'tonal', () => openSet(P.id), 'key-round') : null);
+    if (bridge.ai.available()) {
+      const any = Object.keys(PROVIDERS).some((id) => providerReady(id));
+      if (!any) {
+        // 아직 키가 하나도 없을 때: 무료로 시작할 수 있는 방법을 먼저 보여 준다
+        body.append(h('div', { class: 'ai-setup' }, note(t('AI 수정을 쓰려면 제공자를 하나 골라 키를 넣어야 해요. 결제 없이 시작하려면 무료 옵션을 써 보세요.', 'Pick a provider and add a key to use AI edit. To start without paying, try a free option.')),
+          h('div', { class: 'row wrap' }, Btn(t('Cloudflare · 하루 무료', 'Cloudflare · daily free'), 'tonal', () => openSet('cloudflare'), 'key-round'), Btn(t('OpenRouter · 무료 모델', 'OpenRouter · free models'), 'tonal', () => openSet('openrouter'), 'key-round'), Btn(t('OpenAI · 유료', 'OpenAI · paid'), 'outlined', () => openSet('openai'), 'key-round'))));
+      } else if (!providerReady(P.id)) {
+        body.append(h('div', { class: 'ai-setup' }, note(t(`${P.short} 키를 설정하면 바로 쓸 수 있어요.`, `Set up your ${P.short} key to use it.`)), Btn(t('키 설정', 'Set up key'), 'tonal', () => openSet(P.id), 'key-round')));
+      }
+    }
+    body.append(h('div', { class: 'row wrap', style: { justifyContent: 'space-between' } }, h('span', { class: 'sheet-note' }, t('제공자: ', 'Provider: ') + P.short + ' · ' + P.tag()), Btn(t('바꾸기', 'Change'), 'text', () => openSet(P.id))));
+    body.append(promptEl, presets.el);
+    if (P.hasQuality) body.append(sec(t('품질', 'Quality')), quality.el);
+    if (P.maxN > 1) body.append(sec(t('생성 개수 (개수만큼 요금이 늘어요)', 'Variants (cost grows with the count)')), count.el);
+    body.append(sec(t('주변 포함 (넓을수록 어울리게 만들지만 결과가 덜 선명할 수 있어요)', 'Context (wider blends better but may look softer)')), ctx.el,
+      note(P.usesMask
+        ? t('선택 영역과 주변만 전송하고, 결과는 선택 안쪽에만 합쳐져요. 취소해도 이미 시작된 요청은 요금이 청구될 수 있어요.', 'Only the selected area and its surroundings are sent, and the result is blended only inside your selection. Cancelling may not avoid charges for a request already started.')
+        : t('선택 영역과 주변(편집할 곳을 마젠타로 표시한 사본 포함)만 전송하고, 결과는 선택 안쪽에만 합쳐져요. 무료 모델은 결과가 들쭉날쭉할 수 있어요. 마음에 안 들면 “다시 생성”을 눌러 보세요.', 'Only the selected area and its surroundings (plus a copy with the edit area marked in magenta) are sent, and the result is blended only inside your selection. Free models can be hit-or-miss; try "Regenerate".')),
+      Btn(t('AI 설정', 'AI settings'), 'text', () => openSet(P.id), 'key-round'));
   }
 
   // ------------------------------------------------------------ 진행 중 / 결과
@@ -289,7 +305,7 @@ export function open(ed, body) {
     if (!review || closed) return;
     const v = review.variants[S.variant];
     const p = review.prep.place;
-    const layer = { id: review.layerId, t: 'image', asset: v.key, x: p.x, y: p.y, w: p.w, rot: 0, opacity: review.opacity, lock: true, ai: { prompt: S.prompt.slice(0, 200), model: review.model, ts: Date.now() } };
+    const layer = { id: review.layerId, t: 'image', asset: v.key, x: p.x, y: p.y, w: p.w, rot: 0, opacity: review.opacity, lock: true, ai: { prompt: S.prompt.slice(0, 200), model: review.model, provider: review.provider, ts: Date.now() } };
     ed.preview((d) => setIn(d, 'layers', [...d.layers, layer]));
   }
   function dropVariants() { if (review) { review.variants.forEach((v) => ed.dropAsset(v.key)); } }
@@ -316,8 +332,8 @@ export function open(ed, body) {
   }
   function regenerate() { if (review) { ed.store.revert(); dropVariants(); review = null; } S.phase = 'select'; onGenerate(true); }
 
-  async function askConsent(base) {
-    const v = await confirmDialog({ title: t('AI 서버로 사진 일부를 보내요', 'Send part of your photo to an AI server'), body: privacyNote(base), actions: [{ label: t('취소', 'Cancel'), value: 'no' }, { label: t('동의하고 계속', 'Agree & continue'), value: 'yes', kind: 'filled' }] });
+  async function askConsent(P) {
+    const v = await confirmDialog({ title: t('AI 서버로 사진 일부를 보내요', 'Send part of your photo to an AI server'), body: privacyNote(P.id), actions: [{ label: t('취소', 'Cancel'), value: 'no' }, { label: t('동의하고 계속', 'Agree & continue'), value: 'yes', kind: 'filled' }] });
     return v === 'yes';
   }
 
@@ -327,11 +343,12 @@ export function open(ed, body) {
     if (!selBox()) { toast(t('먼저 수정할 영역을 선택해 주세요', 'Select an area first')); S.tab = 'select'; renderBody(); return; }
     if (!S.prompt.trim()) { toast(t('어떻게 바꿀지 적어 주세요', 'Describe the change first')); S.tab = 'ask'; renderBody(); if (promptEl) promptEl.focus(); return; }
     if (!bridge.ai.available()) { toast(t('AI 요청은 앱(APK)에서만 쓸 수 있어요', 'AI requests work only in the app (APK)')); return; }
-    const info = bridge.ai.info();
-    if (!info || !info.hasKey) { S.tab = 'ask'; renderBody(); openAiSettings(ed.app, { onClose: renderBody }); return; }
-    if (!skipChecks && !(cfg.consent && cfg.consent.base === info.base)) {
-      if (!(await askConsent(info.base))) return;
-      cfg.consent = { base: info.base, ts: Date.now() }; save();
+    const P = prov();
+    if (!providerReady(P.id)) { S.tab = 'ask'; renderBody(); openAiSettings(ed.app, { provider: P.id, onClose: renderBody }); return; }
+    const host = P.host(providerInfo(P.id));
+    if (!skipChecks && cfg.consents[P.id] !== host) {
+      if (!(await askConsent(P))) return;
+      cfg.consents[P.id] = host; save();
     }
     if (closed) return;
     runJob();
@@ -339,24 +356,25 @@ export function open(ed, body) {
 
   async function runJob() {
     ed.store.revert(); // 이전 미리보기(결과 레이어)가 요청 이미지에 섞이지 않게
+    const P = prov();
     const ctl = new AbortController();
     job = { ctl, t0: performance.now(), phase: 'prepare', prep: null };
     S.phase = 'busy'; renderAll(); startTimer();
     bridge.keepScreenOn(true); // 기다리는 동안 화면이 꺼져 앱이 멈추지 않게
     let variants = [];
     try {
-      const model = await resolveModel(ed.app);
+      const model = await resolveModel(ed.app, P.id);
       if (ctl.signal.aborted) throw new AiError({ code: 'cancelled' });
-      const prep = await prepareRequest(ed, { mask: eff, w: mw, h: mh }, { ctx: cfg.ctx, feather: cfg.feather });
+      const prep = await prepareRequest(ed, { mask: eff, w: mw, h: mh }, { ctx: cfg.ctx, feather: cfg.feather, provider: P });
       if (ctl.signal.aborted || closed) throw new AiError({ code: 'cancelled' });
       job.prep = prep; renderBody();
-      const req = buildEditRequest({ model, prompt: S.prompt, size: prep.size.str, quality: cfg.quality, n: cfg.n }, prep.imageBlob, prep.maskBlob);
-      const blobs = await editImage(req, { signal: ctl.signal, onPhase: (p) => { if (job) job.phase = p; } });
+      const req = await P.buildEdit({ model, prompt: S.prompt, size: prep.size, quality: cfg.quality, n: Math.min(cfg.n, P.maxN), outputs: (pcfg(cfg, P.id).meta || {})[model] }, { image: prep.imageBlob, mask: prep.maskBlob, marked: prep.markedBlob });
+      const blobs = await P.edit(req, { signal: ctl.signal, onPhase: (p) => { if (job) job.phase = p; } });
       if (job) job.phase = 'finish';
       updatePhase();
       for (const b of blobs) { const cv = await makePatch(b, prep, { feather: cfg.feather, tone: cfg.tone }); variants.push({ cv, key: ed.addCanvasAsset(cv) }); }
       if (ctl.signal.aborted || closed) throw new AiError({ code: 'cancelled' });
-      review = { prep, variants, model, layerId: uid(), opacity: 1 };
+      review = { prep, variants, model, provider: P.id, layerId: uid(), opacity: 1 };
       variants = [];
       S.variant = 0; S.phase = 'review'; job = null; stopTimer();
       previewVariant(); renderAll();
@@ -368,7 +386,7 @@ export function open(ed, body) {
       const info = e instanceof AiError ? e.info : { code: 'other', message: String((e && e.message) || e) };
       if (!(e instanceof AiError)) console.error(e);
       if (info.code === 'cancelled') S.msg = null;
-      else { S.msg = explainError(info); if (S.msg.key === 'model') { cfg.resolved = ''; save(); } }
+      else { S.msg = explainError(info); if (S.msg.key === 'model') { pcfg(cfg, P.id).resolved = ''; save(); } }
       renderAll();
       if (S.msg) toast(S.msg.text);
     } finally {
