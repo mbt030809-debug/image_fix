@@ -5,14 +5,34 @@ import { mulberry32 } from './engine/util.js';
 
 export const FONTS = {
   sans: { ko: '고딕', en: 'Sans', w: 500, stack: '"Noto Sans KR","Noto Sans CJK KR",Roboto,"Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif' },
-  black: { ko: '굵은 고딕', en: 'Black', w: 900, stack: '"Noto Sans KR","Noto Sans CJK KR",Roboto,"Arial Black",system-ui,sans-serif' },
+  black: { ko: '굵은 고딕', en: 'Bold sans', w: 900, stack: '"Noto Sans KR","Noto Sans CJK KR",Roboto,"Arial Black",system-ui,sans-serif' },
   serif: { ko: '명조', en: 'Serif', w: 500, stack: '"Noto Serif KR","Noto Serif CJK KR","Source Serif 4",Georgia,"Times New Roman",serif' },
-  rounded: { ko: '둥근', en: 'Rounded', w: 600, stack: '"Google Sans","Nunito","Noto Sans KR","Noto Sans CJK KR",system-ui,sans-serif' },
-  hand: { ko: '손글씨', en: 'Handwriting', w: 500, stack: '"Nanum Pen Script","Dancing Script","Segoe Script","Noto Sans KR",cursive' },
-  script: { ko: '필기체', en: 'Script', w: 500, stack: '"Dancing Script","Brush Script MT","Segoe Script",cursive' },
+  blackhan: { ko: '블랙한산스', en: 'Black Han Sans', w: 400, bundled: true, stack: '"Black Han Sans","Noto Sans KR","Noto Sans CJK KR",sans-serif' },
+  jua: { ko: '주아', en: 'Jua', w: 400, bundled: true, stack: '"Jua","Noto Sans KR","Noto Sans CJK KR",sans-serif' },
+  pen: { ko: '손글씨 펜', en: 'Pen script', w: 400, bundled: true, stack: '"Nanum Pen Script","Noto Sans KR","Noto Sans CJK KR",cursive' },
+  dancing: { ko: '필기체', en: 'Script', w: 400, bundled: true, stack: '"Dancing Script","Nanum Pen Script","Noto Sans KR",cursive' },
+  pacifico: { ko: '파시피코', en: 'Pacifico', w: 400, bundled: true, stack: '"Pacifico","Noto Sans KR",cursive' },
+  bebas: { ko: '베바스', en: 'Bebas Neue', w: 400, bundled: true, stack: '"Bebas Neue","Noto Sans KR","Noto Sans CJK KR",Impact,sans-serif' },
+  marker: { ko: '마커', en: 'Marker', w: 400, bundled: true, stack: '"Permanent Marker","Noto Sans KR",cursive' },
+  playfair: { ko: '플레이페어', en: 'Playfair', w: 400, bundled: true, stack: '"Playfair Display","Noto Serif KR","Noto Serif CJK KR",Georgia,serif' },
   mono: { ko: '고정폭', en: 'Mono', w: 500, stack: '"Roboto Mono","Noto Sans Mono CJK KR","Courier New",monospace' },
   impact: { ko: '임팩트', en: 'Impact', w: 900, stack: 'Impact,"Anton","Arial Black","Noto Sans KR","Noto Sans CJK KR",sans-serif' },
 };
+// 옛 문서 호환
+const FONT_ALIAS = { hand: 'pen', script: 'dancing', rounded: 'jua' };
+/** 번들 폰트 로드 이벤트: 로드가 끝나면 텍스트 캐시를 비우고 다시 그린다 */
+export const fontEvents = { epoch: 0, onChange: null };
+const fontInflight = new Set();
+function ensureFontLoaded(css, text) {
+  try {
+    if (document.fonts.check(css, text)) return;
+    const key = css + '|' + text;
+    if (fontInflight.has(key)) return;
+    fontInflight.add(key);
+    document.fonts.load(css, text).then(() => { fontEvents.epoch++; textCache.clear(); fontInflight.delete(key); fontEvents.onChange && fontEvents.onChange(); }, () => fontInflight.delete(key));
+  } catch (e) { /* 지원 안 함 */ }
+}
+
 const EMOJI_STACK = '"Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji","Twemoji Mozilla",sans-serif';
 
 let mctx = null;
@@ -22,7 +42,7 @@ function measureCtx() {
 }
 
 export function fontCss(L, fs) {
-  const f = FONTS[L.font] || FONTS.sans;
+  const f = FONTS[L.font] || FONTS[FONT_ALIAS[L.font]] || FONTS.sans;
   const w = L.bold ? Math.min(900, (f.w || 500) + 300) : f.w || 500;
   return `${L.italic ? 'italic ' : ''}${w} ${fs}px ${f.stack}`;
 }
@@ -108,9 +128,10 @@ function clearShadow(ctx) { ctx.shadowColor = 'rgba(0,0,0,0)'; ctx.shadowBlur = 
 
 const textCache = new Map();
 function renderTextBitmap(L, fs, unit) {
-  const key = JSON.stringify([L.text, L.font, L.bold, L.italic, L.underline, L.strike, L.align, L.color, L.grad, L.spacing, L.lineH, L.stroke, L.shadow, L.box, Math.round(fs * 10), Math.round(unit)]);
+  const key = fontEvents.epoch + JSON.stringify([L.text, L.font, L.bold, L.italic, L.underline, L.strike, L.align, L.color, L.grad, L.spacing, L.lineH, L.stroke, L.shadow, L.box, Math.round(fs * 10), Math.round(unit)]);
   const hit = textCache.get(key);
   if (hit) { textCache.delete(key); textCache.set(key, hit); return hit; }
+  ensureFontLoaded(fontCss(L, fs), String(L.text || 'A'));
   const mc = measureCtx();
   const lay = layoutText(mc, L, fs);
   const { bw, bh, lh } = lay;
@@ -357,6 +378,7 @@ export const FRAME_PRESETS = [
   { id: 'blur45', ko: '블러 4:5', en: 'Blur 4:5', p: { pad: 6, color: '#222222', radius: 4, shadow: 35, bg: 'blur', aspect: '4:5' } },
   { id: 'blur916', ko: '블러 9:16', en: 'Blur 9:16', p: { pad: 6, color: '#222222', radius: 4, shadow: 35, bg: 'blur', aspect: '9:16' } },
   { id: 'grad', ko: '그라데이션', en: 'Gradient', p: { pad: 6, color: '#ff9a9e', color2: '#fad0c4', radius: 4, shadow: 30, bg: 'gradient' } },
+  { id: 'circle', ko: '원형(투명)', en: 'Circle', p: { pad: 0, color: '#ffffff', radius: 50, shadow: 0, bg: 'none', aspect: '1:1' } },
   { id: 'film', ko: '필름', en: 'Film', p: { pad: 7, color: '#0e0e0e', radius: 0, shadow: 0, bg: 'color', film: true } },
   { id: 'double', ko: '이중선', en: 'Double line', p: { pad: 7, color: '#ffffff', radius: 0, shadow: 0, bg: 'color', line: 1 } },
 ];
@@ -394,7 +416,7 @@ export function applyFrame(photo, f, assets) {
     c.drawImage(photo, (lay.W - photo.width * k) / 2, (lay.H - photo.height * k) / 2, photo.width * k, photo.height * k);
     c.restore();
   } else if (f.bg === 'gradient') drawBackground(c, { type: 'gradient', color: f.color, color2: f.color2, angle: 135 }, lay.W, lay.H);
-  else { c.fillStyle = f.color || '#ffffff'; c.fillRect(0, 0, lay.W, lay.H); }
+  else if (f.bg !== 'none') { c.fillStyle = f.color || '#ffffff'; c.fillRect(0, 0, lay.W, lay.H); }
   const mn = Math.min(photo.width, photo.height);
   const r = (f.radius || 0) / 100 * mn;
   // 그림자 + 사진

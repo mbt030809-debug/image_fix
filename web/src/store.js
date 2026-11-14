@@ -13,6 +13,7 @@ export function newDoc() {
     locals: [],
     layers: [],
     frame: null,
+    out: null,
     bg: { type: 'none' },
   };
 }
@@ -50,7 +51,8 @@ export class Store {
     this.doc = this.base;          // 현재(미리보기 포함)
     this.past = [];
     this.future = [];
-    this.labels = [];              // past 와 같은 길이: 각 항목의 라벨(= 해당 상태로 이어진 변경)
+    this.labels = [];              // past 와 같은 길이: 각 변경의 라벨
+    this.futureLabels = [];
     this.listeners = new Set();
     this.max = 120;
     this.revision = 0;
@@ -72,7 +74,7 @@ export class Store {
     this.past.push(this.base);
     this.labels.push(label || '');
     if (this.past.length > this.max) { this.past.shift(); this.labels.shift(); }
-    this.future = [];
+    this.future = []; this.futureLabels = [];
     this.base = this.doc;
     this.revision++;
     this.emit('commit');
@@ -92,7 +94,7 @@ export class Store {
     if (!this.past.length) return false;
     this.future.push(this.base);
     this.base = this.doc = this.past.pop();
-    this.labels.pop();
+    this.futureLabels.push(this.labels.pop());
     this.revision--;
     this.emit('undo');
     return true;
@@ -100,7 +102,7 @@ export class Store {
   redo() {
     if (!this.future.length) return false;
     this.past.push(this.base);
-    this.labels.push('');
+    this.labels.push(this.futureLabels.pop() || '');
     this.base = this.doc = this.future.pop();
     this.revision++;
     this.emit('redo');
@@ -109,9 +111,23 @@ export class Store {
   /** 새 문서로 교체하고 히스토리 초기화 */
   reset(doc) {
     this.base = this.doc = doc || newDoc();
-    this.past = []; this.future = []; this.labels = [];
+    this.past = []; this.future = []; this.labels = []; this.futureLabels = [];
     this.revision = 0; this.savedRevision = 0;
     this.emit('reset');
+  }
+  /** 작업 기록 목록: [{label, idx, current, future}] — idx 는 상태 번호(0=원본) */
+  history() {
+    const cur = this.labels.length;
+    const list = [{ label: '', idx: 0, current: cur === 0, original: true }];
+    this.labels.forEach((l, i) => list.push({ label: l, idx: i + 1, current: cur === i + 1 }));
+    this.futureLabels.slice().reverse().forEach((l, i) => list.push({ label: l, idx: cur + 1 + i, future: true }));
+    return list;
+  }
+  /** 상태 번호로 이동 (undo/redo 반복) */
+  jump(idx) {
+    let cur = this.labels.length;
+    while (cur > idx && this.undo()) cur--;
+    while (cur < idx && this.redo()) cur++;
   }
   isDirty() { return this.revision !== this.savedRevision || this.doc !== this.base; }
   markSaved() { this.savedRevision = this.revision; }

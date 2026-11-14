@@ -9,7 +9,7 @@ async function step(name, fn) { try { await fn(); } catch (e) { fails.push(name 
   const h = await launch();
   const { page } = h;
   await openPhoto(page, path.join(FIX, process.argv[2] || 'landscape.jpg'));
-  const stage = await page.locator('.stage').boundingBox();
+  const stage = await page.locator('.screen:not([hidden]) .stage').first().boundingBox();
   const cx = stage.x + stage.width / 2, cy = stage.y + stage.height / 2;
   const setSlider = async (idx, v) => page.evaluate(([i, v]) => { const s = document.querySelectorAll('.sheet .slider')[i]; s.value = v; s.dispatchEvent(new Event('input', { bubbles: true })); s.dispatchEvent(new Event('change', { bubbles: true })); }, [idx, v]);
   const tool = async (id, wait = 500) => { await page.click(`[data-tool=${id}]`); await waitIdle(page, wait); };

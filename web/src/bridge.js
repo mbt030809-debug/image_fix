@@ -11,8 +11,11 @@ async function pullPending() {
   const files = [];
   for (let i = 0; i < n; i++) {
     try {
-      const res = await fetch('/__shared/' + i);
+      let res = await fetch('/__shared/' + i);
       if (!res.ok) continue;
+      const mt = (res.headers.get('Content-Type') || '').toLowerCase();
+      const nm = nameFromHeader(res.headers.get('X-File-Name')).toLowerCase();
+      if (/hei[cf]/.test(mt) || /\.(heic|heif)$/.test(nm)) { const r2 = await fetch('/__shared/' + i + '?convert=1'); if (r2.ok) res = r2; }
       const blob = await res.blob();
       const name = nameFromHeader(res.headers.get('X-File-Name')) || 'image';
       files.push(new File([blob], name, { type: blob.type || 'application/octet-stream' }));

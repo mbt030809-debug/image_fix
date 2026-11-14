@@ -172,7 +172,9 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
         s.setAllowFileAccess(false);
-        s.setAllowContentAccess(false);
+        // 파일 선택(input[type=file]) 결과가 content:// 로 넘어오므로 허용. 페이지는 CSP(self/data/blob)와
+        // shouldInterceptRequest(외부 스킴 403)로 어차피 content:// 를 직접 불러올 수 없다.
+        s.setAllowContentAccess(true);
         s.setAllowFileAccessFromFileURLs(false);
         s.setAllowUniversalAccessFromFileURLs(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);

@@ -1,0 +1,17 @@
+// Android Studio 로 열 때 사용하는 Gradle 설정 (이 저장소의 기본 빌드는 scripts/build_apk.sh — SDK 없이 동작)
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "ImageFix"
+include ':app'

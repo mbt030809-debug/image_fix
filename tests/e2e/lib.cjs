@@ -10,10 +10,16 @@ const OUT = path.resolve(__dirname, '../out');
 const DATE = '2026-11-14';
 fs.mkdirSync(OUT, { recursive: true });
 
-function startServer() {
+function startServer(shared) {
   return new Promise((resolve) => {
     const srv = http.createServer((req, res) => {
       let p = decodeURIComponent(req.url.split('?')[0]);
+      if (shared && p.startsWith('/__shared/')) {
+        const i = parseInt(p.split('/')[2], 10), it = shared[i];
+        if (!it) { res.writeHead(404); res.end('nf'); return; }
+        res.writeHead(200, { 'Content-Type': 'image/jpeg', 'X-File-Name': encodeURIComponent(it.name), 'Cache-Control': 'no-store' });
+        fs.createReadStream(it.file).pipe(res); return;
+      }
       if (p === '/') p = '/index.html';
       const f = path.join(WWW, p);
       if (!f.startsWith(WWW) || !fs.existsSync(f)) { res.writeHead(404); res.end('nf'); return; }
@@ -25,10 +31,11 @@ function startServer() {
 }
 
 async function launch(opts = {}) {
-  const { srv, url } = await startServer();
+  const { srv, url } = await startServer(opts.shared);
   const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'] });
   const ctx = await browser.newContext({ viewport: { width: opts.w || 412, height: opts.h || 915 }, deviceScaleFactor: opts.dpr || 2, isMobile: true, hasTouch: true, locale: opts.locale || 'ko-KR' });
   const page = await ctx.newPage();
+  if (opts.init) await page.addInitScript(opts.init);
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`[${m.type()}] ${m.text()}`); });
   page.on('pageerror', (e) => errors.push('[pageerror] ' + e.message));

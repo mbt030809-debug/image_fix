@@ -89,30 +89,30 @@ export class Pipeline {
     return { L, p, G: L.G.img };
   }
 
-  /** 전체 렌더. 반환 {w,h,d,hist?} (d 는 복사본) */
+  /** 전체 렌더. 반환 {w,h,d,hist?} (d 는 복사본). o.release 면 캐시를 쓰지 않고 제자리 처리 후 메모리를 비운다(내보내기용). */
   render(doc, o = {}) {
     if (!this.src) throw new Error('no source');
     const { L, p, G } = this.geometryStage(doc, o);
-    const dKey = j([doc.adj, doc.filter, doc.fx, doc.locals]) + '|' + (o.noDevelop ? 1 : 0);
+    const dKey = j([doc.adj, doc.filter, doc.fx, doc.locals, doc.lutRef]) + '|' + (o.noDevelop ? 1 : 0);
+    const inPlace = !!o.release;
     let D;
-    if (L.D && L.D.key === dKey) D = L.D.img;
+    if (!inPlace && L.D && L.D.key === dKey) D = L.D.img;
     else {
-      D = cloneImg(G);
+      D = inPlace ? G : cloneImg(G);
       if (!o.noDevelop) {
         const f = doc.filter && doc.filter.id && doc.filter.id !== 'none' ? getFilter(doc.filter.id) : null;
         const A = mergeAdj(doc.adj, f ? f.p : null, f ? (doc.filter.amt == null ? 100 : doc.filter.amt) / 100 : 0);
-        if (doc.filter && doc.filter.lut && !A.lut) A.lut = doc.filter.lut;
         const lutAsset = doc.lutRef ? this.assets.get(doc.lutRef.key) : null;
         if (lutAsset) A.lut = { size: lutAsset.size, data: lutAsset.data, amt: (doc.lutRef.amt == null ? 100 : doc.lutRef.amt) / 100 };
         developImage(D, A, { seed: 7 });
         applyLocals(D, doc.locals, { w: D.w, h: D.h, crop: p.crop });
         applyEffects(D, doc.fx, { w: D.w, h: D.h, mn: Math.min(D.w, D.h) });
       }
-      L.D = { key: dKey, img: D };
+      if (!inPlace) L.D = { key: dKey, img: D };
     }
-    const out = { w: D.w, h: D.h, d: new Uint8ClampedArray(D.d) };
+    const out = inPlace ? { w: D.w, h: D.h, d: D.d } : { w: D.w, h: D.h, d: new Uint8ClampedArray(D.d) };
     if (o.hist) out.hist = histogram(D, Math.max(1, Math.round(Math.sqrt((D.w * D.h) / 90000))));
-    if (o.release) this.layers.clear();
+    if (inPlace) this.layers.clear();
     return out;
   }
 

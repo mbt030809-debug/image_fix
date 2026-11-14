@@ -51,11 +51,11 @@ export function open(ed, body) {
     const f = get();
     if (!f) { ctl.append(h('p', { class: 'sheet-note' }, t('프리셋을 고르면 세부 설정이 나타나요.', 'Pick a preset to fine-tune it.'))); return; }
     const S = (label, key, min, max, def, unit = '') => Slider({ label, min, max, value: f[key] == null ? def : f[key], def, unit, bipolar: false, onInput: (v) => set({ [key]: v }, false), onChange: () => ed.commit(t('프레임', 'Frame')) }).el;
-    const bg = Segmented({ label: t('배경', 'Background'), items: [{ id: 'color', label: t('단색', 'Solid') }, { id: 'blur', label: t('블러', 'Blur') }, { id: 'gradient', label: t('그라데이션', 'Gradient') }], value: f.bg || 'color', onChange: (v) => { set({ bg: v }, true); renderControls(); } });
+    const bg = Segmented({ label: t('배경', 'Background'), items: [{ id: 'color', label: t('단색', 'Solid') }, { id: 'blur', label: t('블러', 'Blur') }, { id: 'gradient', label: t('그라데이션', 'Gradient') }, { id: 'none', label: t('투명', 'None') }], value: f.bg || 'color', onChange: (v) => { set({ bg: v }, true); renderControls(); } });
     const asp = Chips({ label: t('비율', 'Aspect'), items: ASPECTS.map(([id, ko, en]) => ({ id, label: t(ko, en) })), value: f.aspect || 'free', onSelect: (id) => set({ aspect: id }, true) });
     ctl.append(S(t('여백', 'Padding'), 'pad', 0, 30, 4, '%'), S(t('아래 여백', 'Bottom padding'), 'bottom', 0, 30, 0, '%'), S(t('모서리', 'Corner radius'), 'radius', 0, 50, 0, '%'), S(t('그림자', 'Shadow'), 'shadow', 0, 100, 0, '%'),
       h('div', { class: 'sheet-sec' }, t('배경', 'Background')), bg.el);
-    if ((f.bg || 'color') !== 'blur') ctl.append(ColorField(ed, { label: f.bg === 'gradient' ? t('시작 색', 'Start color') : t('색상', 'Color'), value: f.color || '#ffffff', onChange: (c, commit) => set({ color: c }, commit) }).el);
+    if ((f.bg || 'color') !== 'blur' && f.bg !== 'none') ctl.append(ColorField(ed, { label: f.bg === 'gradient' ? t('시작 색', 'Start color') : t('색상', 'Color'), value: f.color || '#ffffff', onChange: (c, commit) => set({ color: c }, commit) }).el);
     if (f.bg === 'gradient') ctl.append(ColorField(ed, { label: t('끝 색', 'End color'), value: f.color2 || '#fad0c4', onChange: (c, commit) => set({ color2: c }, commit) }).el);
     ctl.append(h('div', { class: 'sheet-sec' }, t('캔버스 비율', 'Canvas ratio')), asp.el);
   }

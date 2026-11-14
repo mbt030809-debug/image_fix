@@ -7,6 +7,10 @@ import { EFFECTS, effectDefaults, applyEffects } from '../src/engine/effects.js'
 import { DEFAULT_GEO, renderGeometry, applyOrientOp, maxCropRect, fitCropInside, cropValid, canvasToSource, apply3 } from '../src/engine/geometry.js';
 import { applyRetouch } from '../src/engine/retouch.js';
 import { Pipeline } from '../src/engine/pipeline.js';
+import { parseCube } from '../src/engine/lut.js';
+import { Store, newDoc, setIn } from '../src/store.js';
+import { cropToAspect, applyOut } from '../src/tools/resize.js';
+import { rasterStrokeRegion, linearMask, radialMask } from '../src/engine/mask.js';
 
 let pass = 0, fail = 0;
 const t0 = Date.now();
@@ -185,6 +189,85 @@ section('pipeline');
   ok(mean(r2, 1) !== mean(r, 1), 'pipeline reacts to adj');
   const th = p.thumbs(doc, ['none', 'vivid', 'noir'], 48); ok(th.length === 3 && th[0].w <= 48, 'thumbs');
   const full = p.render(doc, { scale: 1 }); ok(full.w === 240 && full.h === 160, 'full-res crop dims');
+}
+
+
+section('store / history');
+{
+  const st = new Store(newDoc());
+  st.apply((d) => setIn(d, 'adj.exposure', 10), 'A');
+  st.apply((d) => setIn(d, 'adj.contrast', 20), 'B');
+  st.apply((d) => setIn(d, 'adj.shadows', 30), 'C');
+  let hist = st.history();
+  ok(hist.length === 4 && hist[3].current && hist[3].label === 'C' && hist[0].original, 'history list', JSON.stringify(hist.map((x) => x.label)));
+  st.jump(1);
+  ok(st.get().adj.exposure === 10 && !st.get().adj.contrast, 'jump back to state 1');
+  hist = st.history();
+  ok(hist[1].current && hist[3].future && hist[3].label === 'C', 'future entries keep labels', JSON.stringify(hist.map((x) => x.label + (x.future ? '*' : ''))));
+  st.jump(3);
+  ok(st.get().adj.shadows === 30 && st.canRedo() === false, 'jump forward to latest');
+  st.jump(0);
+  ok(Object.keys(st.get().adj).length === 0, 'jump to original');
+  st.apply((d) => setIn(d, 'adj.tint', 5), 'D');
+  ok(st.history().length === 2 && !st.canRedo(), 'new commit drops future');
+  st.preview((d) => setIn(d, 'adj.tint', 50));
+  ok(st.get().adj.tint === 50 && st.getBase().adj.tint === 5, 'preview does not touch base');
+  st.revert(); ok(st.get().adj.tint === 5, 'revert');
+}
+
+section('resize / out');
+{
+  const info = { w: 2000, h: 1500 };
+  const d0 = newDoc();
+  const c = cropToAspect(d0.geo, d0.geo.crop, 4 / 5, 2000, 1500);
+  near((c[2] * 2000) / (c[3] * 1500), 0.8, 0.005, 'cropToAspect 4:5');
+  ok(c[0] > 0 && c[0] + c[2] < 1 + 1e-9 && Math.abs(c[0] + c[2] / 2 - 0.5) < 1e-6, 'crop stays centered');
+  const wide = cropToAspect(d0.geo, d0.geo.crop, 3, 2000, 1500);
+  near((wide[2] * 2000) / (wide[3] * 1500), 3, 0.01, 'cropToAspect wide');
+  const f = applyOut(d0, { w: 1080, h: 1920, fit: 'fit', bg: 'blur', color: '#000' }, info);
+  ok(f.frame && f.frame.aspect === '1080:1920' && f.frame.fromResize && f.out.w === 1080, 'fit sets frame aspect');
+  const back = applyOut(f, { w: 1080, h: 1350, fit: 'fill', bg: 'blur', color: '#000' }, info);
+  ok(!back.frame && back.out.h === 1350, 'fill clears resize frame');
+  const none = applyOut(f, null, info);
+  ok(!none.frame && !none.out, 'clear out');
+  const userFrame = applyOut({ ...d0, frame: { pad: 5, color: '#fff', bg: 'color', radius: 0, shadow: 0 } }, { w: 800, h: 800, fit: 'stretch' }, info);
+  ok(userFrame.frame && userFrame.frame.pad === 5, 'stretch keeps user frame');
+}
+
+section('lut / mask / wand');
+{
+  const cube = `TITLE "t"\nLUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n`.replace(/\\n/g, '\n');
+  const lut = parseCube(cube);
+  ok(lut.size === 2 && lut.data.length === 24 && lut.data[3] === 1 && lut.data[4] === 0, 'parse .cube');
+  let threw = false; try { parseCube('LUT_3D_SIZE 2\n0 0 0'); } catch (e) { threw = true; } ok(threw, 'bad cube throws');
+  // LUT 적용 (항등 LUT 는 색을 바꾸지 않음)
+  const img = testImage(60, 40); const before = cloneImg(img);
+  developImage(img, { lut: { size: 2, data: lut.data, amt: 1 } });
+  ok(diff(before, img) < 1.5, 'identity LUT keeps colors', 'diff=' + diff(before, img).toFixed(2));
+
+  const reg = rasterStrokeRegion([20, 20, 40, 20], 6, 0.5, 100, 100);
+  ok(reg.w > 0 && reg.m.some((v) => v > 0.99) && reg.m.every((v) => v >= 0 && v <= 1), 'stroke raster region');
+  const lm = linearMask(50, 50, 25, 40, 25, 10, 0.2); ok(lm[45 * 50 + 25] < 0.05 && lm[5 * 50 + 25] > 0.95 && Math.abs(lm[25 * 50 + 25] - 0.5) < 0.2, 'linear mask orientation (0 at start, 1 at end)');
+  const rm = radialMask(50, 50, 25, 25, 10, 10, 0, 0.3); ok(rm[25 * 50 + 25] > 0.99 && rm[2 * 50 + 2] < 0.01, 'radial mask');
+
+  // 단색 배경 + 중앙 물체: 자동 배경 선택 / 마술봉
+  const p = new Pipeline();
+  const scene = makeImg(100, 80);
+  for (let y = 0; y < 80; y++) for (let x = 0; x < 100; x++) { const i = (y * 100 + x) * 4; const inside = (x - 50) ** 2 + (y - 40) ** 2 < 18 ** 2; scene.d[i] = inside ? 200 : 40; scene.d[i + 1] = inside ? 60 : 140; scene.d[i + 2] = inside ? 50 : 180; scene.d[i + 3] = 255; }
+  p.setSource(scene);
+  const bg = p.autoBg(30);
+  ok(bg.data[2 * bg.w + 2] === 255 && bg.data[Math.floor(bg.h / 2) * bg.w + Math.floor(bg.w / 2)] === 0, 'autoBg selects background only');
+  const wd = p.wand(0.5, 0.5, 20, true);
+  ok(wd.data[Math.floor(wd.h / 2) * wd.w + Math.floor(wd.w / 2)] === 255 && wd.data[2 * wd.w + 2] === 0, 'wand selects the clicked region');
+  // 배경 흐림 / 제거 op
+  const mask = { w: bg.w, h: bg.h, data: new Uint8Array(bg.data.length) }; for (let i = 0; i < mask.data.length; i++) mask.data[i] = 255 - bg.data[i];
+  p.setAsset('m', mask);
+  const cut = p.render({ geo: DEFAULT_GEO(), retouch: [{ k: 'cut', mask: 'm', feather: 0, grow: 0 }], adj: {}, filter: { id: 'none' }, fx: [], locals: [] }, { scale: 1 });
+  ok(cut.d[(40 * 100 + 50) * 4 + 3] === 255 && cut.d[(2 * 100 + 2) * 4 + 3] === 0, 'cut op makes background transparent');
+  const bb = p.render({ geo: DEFAULT_GEO(), retouch: [{ k: 'bgblur', mask: 'm', amount: 80, feather: 0, grow: 0 }], adj: {}, filter: { id: 'none' }, fx: [], locals: [] }, { scale: 1 });
+  ok(bb.d[(40 * 100 + 50) * 4] === 200 && allValid({ d: bb.d }), 'bgblur keeps subject sharp');
+  const lq = applyRetouch(cloneImg(testImage(80, 60)), [{ k: 'liq', mode: 'twirlL', r: 0.2, str: 0.8, pts: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5] }], new Map());
+  ok(allValid(lq), 'liquify twirl ccw');
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} ${pass} passed, ${fail} failed (${((Date.now() - t0) / 1000).toFixed(1)}s)`);

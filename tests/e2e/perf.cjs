@@ -1,0 +1,30 @@
+const path = require('path');
+const { launch, close, openPhoto, waitIdle } = require('./lib.cjs');
+const FIX = path.resolve(__dirname, '../fixtures');
+(async () => {
+  const h = await launch({ w: 412, h: 915, dpr: 2.625 });
+  const { page } = h;
+  const t0 = Date.now();
+  await openPhoto(page, path.join(FIX, 'big12mp.jpg'));
+  console.log('open+first render ms:', Date.now() - t0, JSON.stringify(await page.evaluate(() => ({ info: window.imagefix.editor.info, base: [window.imagefix.editor.base.w, window.imagefix.editor.base.h] }))));
+  await page.click('[data-tool=adjust]'); await waitIdle(page, 200);
+  const time = async (label, fn) => { const s = Date.now(); await fn(); await waitIdle(page, 0); console.log(label, Date.now() - s, 'ms'); };
+  await time('exposure slider (draft+full)', async () => { await page.evaluate(() => { const s = document.querySelector('.sheet .slider'); s.value = 30; s.dispatchEvent(new Event('input', { bubbles: true })); s.dispatchEvent(new Event('change', { bubbles: true })); }); });
+  await page.click('.chip >> text=명료도'); 
+  await time('clarity', async () => { await page.evaluate(() => { const s = document.querySelector('.sheet .slider'); s.value = 50; s.dispatchEvent(new Event('input', { bubbles: true })); s.dispatchEvent(new Event('change', { bubbles: true })); }); });
+  await page.click('[data-tool=filter]'); await waitIdle(page, 300);
+  await time('filter', async () => { await page.click('.thumb[data-id=film]'); });
+  await page.click('[data-tool=effects]'); await waitIdle(page, 300);
+  await time('effect glow', async () => { await page.click('.chip >> text=빛'); await page.click('.thumb[data-id=glow]'); });
+  // 풀 해상도 내보내기
+  await page.click('.topbar .btn.filled'); await page.waitForTimeout(300);
+  const dl = page.waitForEvent('download', { timeout: 120000 });
+  const s = Date.now();
+  await page.click('[data-act=save]');
+  const d = await dl; const fs = require('fs'); const p = await d.path();
+  console.log('export 12MP ms:', Date.now() - s, 'size KB:', Math.round(fs.statSync(p).size / 1024), d.suggestedFilename());
+  const mem = await page.evaluate(() => performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : -1);
+  console.log('js heap MB:', mem);
+  console.log('errors:', h.errors.join('\n') || 'none');
+  await close(h);
+})().catch((e) => { console.error(e); process.exit(1); });

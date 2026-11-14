@@ -1,6 +1,7 @@
 // 도구 레지스트리 (스트립 표시 순서)
 import { t } from '../i18n.js';
 import * as crop from './crop.js';
+import * as resize from './resize.js';
 import * as adjust from './adjust.js';
 import * as filter from './filter.js';
 import * as color from './color.js';
@@ -17,6 +18,7 @@ import * as layers from './layers.js';
 
 export const TOOLS = [
   { id: 'crop', icon: 'crop', label: () => t('자르기', 'Crop'), open: crop.open },
+  { id: 'resize', icon: 'ratio', label: () => t('크기', 'Size'), open: resize.open },
   { id: 'adjust', icon: 'sliders-horizontal', label: () => t('조정', 'Adjust'), open: adjust.open },
   { id: 'filter', icon: 'wand-sparkles', label: () => t('필터', 'Filters'), open: filter.open },
   { id: 'color', icon: 'palette', label: () => t('색상', 'Color'), open: color.open },

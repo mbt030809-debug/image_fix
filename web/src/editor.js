@@ -5,15 +5,18 @@ import { Store, newDoc, setIn, uid } from './store.js';
 import { View } from './view.js';
 import { IconBtn, Btn, toast, confirmDialog, openModal, handleBack, Segmented, Slider, Chips } from './ui/components.js';
 import { orientedSize } from './engine/geometry.js';
-import { makeGeom, composeDoc, drawLayers, drawBackground, applyFrame, frameLayout } from './compose.js';
+import { makeGeom, composeDoc, drawLayers, drawBackground, applyFrame, frameLayout, fontCss, fontEvents } from './compose.js';
 import { bridge } from './bridge.js';
 import { TOOLS } from './tools/index.js';
+import * as Drafts from './drafts.js';
 
 const PIX_KEYS = ['geo', 'retouch', 'adj', 'filter', 'fx', 'locals', 'lutRef'];
 
 export function docForRender(doc) {
   return { geo: doc.geo, retouch: doc.retouch, adj: doc.adj, filter: doc.filter, fx: doc.fx, locals: doc.locals, lutRef: doc.lutRef };
 }
+
+export function doc0Out(ed) { return ed.store.get().out; }
 
 export class Editor {
   constructor(app) {
@@ -35,6 +38,9 @@ export class Editor {
     this.cropOverride = null;
     this.build();
     this.store.on((k) => this.onStore(k));
+    this.sourceBlob = null;
+    fontEvents.onChange = () => this.paint();
+    document.addEventListener('visibilitychange', () => { if (document.hidden) this.flushDraft(); });
   }
 
   // ------------------------------------------------------------ UI 구성
@@ -123,7 +129,7 @@ export class Editor {
   }
 
   // ------------------------------------------------------------ 문서 열기
-  async openBitmap(bitmap, name) {
+  async openBitmap(bitmap, name, blob) {
     this.loadingEl.hidden = false;
     this.closeTool(false);
     this.assets.clear();
@@ -137,10 +143,11 @@ export class Editor {
     this.sel = null;
     this.store.reset(newDoc());
     this.setOriginalUI(false);
+    this.startDraft(blob);
     this.requestRender('full');
     this.updateButtons();
   }
-  async openBuffer(w, h, buffer, name) {
+  async openBuffer(w, h, buffer, name, blob) {
     this.loadingEl.hidden = false;
     this.closeTool(false);
     this.assets.clear();
@@ -150,17 +157,62 @@ export class Editor {
     this.previewSide = this.computePreviewSide();
     this.origCache = null; this.hist = null; this.lastPix = null; this.base = null; this.sel = null;
     this.store.reset(newDoc());
+    this.startDraft(blob);
     this.requestRender('full');
     this.updateButtons();
   }
   setOriginalUI(v) { this.showOriginal = v; this.badge.hidden = !v; this.cmpBtn.setAttribute('aria-pressed', String(v)); }
 
+  // ------------------------------------------------------------ 자동 복구(드래프트)
+  startDraft(blob) {
+    this.sourceBlob = blob || null;
+    this.masks = new Map();
+    clearTimeout(this.draftT);
+    Drafts.clearAll().then(() => { if (blob) { Drafts.put('src', { blob, name: this.fileName }); this.scheduleDraft(); } });
+  }
+  scheduleDraft() { clearTimeout(this.draftT); this.draftT = setTimeout(() => this.flushDraft(), 1500); }
+  makeThumb() {
+    try {
+      const src = this.view.photo, k = 120 / Math.max(src.width, src.height);
+      const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(src.width * k)); c.height = Math.max(1, Math.round(src.height * k));
+      c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+      return c.toDataURL('image/jpeg', 0.7);
+    } catch (e) { return null; }
+  }
+  async flushDraft() {
+    if (!this.sourceBlob || !this.info || !this.base || this.app.screen !== 'editor') return;
+    if (!this.store.isDirty() && this.store.revision === 0) return;
+    await Drafts.put('doc', { doc: this.store.getBase(), name: this.fileName, ts: Date.now(), thumb: this.makeThumb() });
+  }
+  /** 저장된 드래프트의 문서/자산을 복원 */
+  async restoreDoc(rec) {
+    const doc = JSON.parse(JSON.stringify(rec.doc));
+    const keys = new Set();
+    for (const L of doc.layers || []) if (L.t === 'image') keys.add(L.asset);
+    if (doc.bg && doc.bg.type === 'image') keys.add(doc.bg.asset);
+    for (const k of keys) {
+      const blob = await Drafts.get('asset:' + k);
+      if (blob) { try { const bmp = await createImageBitmap(blob); this.assets.set(k, { src: bmp, width: bmp.width, height: bmp.height }); } catch (e) { /* 건너뜀 */ } }
+    }
+    for (const op of doc.retouch || []) {
+      if (op.k === 'cut' || op.k === 'bgblur') {
+        const m = await Drafts.get('mask:' + op.mask);
+        if (m) { this.masks.set(op.mask, m); await this.engine.setAsset(op.mask, 'mask', { w: m.w, h: m.h, buffer: m.data.slice().buffer }); }
+        else doc.retouch = doc.retouch.filter((o) => o !== op);
+      }
+    }
+    doc.lutRef = null;
+    this.store.reset(doc);
+    this.store.savedRevision = -1; // 저장되지 않은 상태로 표시
+    this.requestRender('full');
+  }
+
   computePreviewSide() {
-    const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+    const dpr = Math.min(2.75, window.devicePixelRatio || 1);
     const r = this.stage.getBoundingClientRect();
     const mem = bridge.info().memMB || 4096;
-    const cap = mem < 3500 ? 1600 : 2304;
-    return Math.max(1024, Math.min(cap, Math.round(Math.max(r.width, r.height || 600, 640) * dpr * 1.2)));
+    const cap = mem < 3500 ? 1440 : 1920;
+    return Math.max(1024, Math.min(cap, Math.round(Math.max(r.width, r.height || 600, 640) * dpr)));
   }
 
   // ------------------------------------------------------------ 문서 변경 접근자
@@ -184,6 +236,7 @@ export class Editor {
     const changed = !last || PIX_KEYS.some((k) => doc[k] !== last[k]);
     if (changed) this.requestRender(kind === 'preview' ? 'draft' : 'full');
     else this.paint();
+    if (kind === 'commit' || kind === 'undo' || kind === 'redo') this.scheduleDraft();
     if (kind === 'preview') {
       clearTimeout(this.idleT);
       this.idleT = setTimeout(() => { if (this.store.get() !== this.store.getBase() || this.base?.draft) this.requestRender('full'); }, 260);
@@ -198,9 +251,7 @@ export class Editor {
 
   // ------------------------------------------------------------ 렌더 스케줄
   requestRender(quality = 'full') {
-    if (quality === 'draft' && this.wantQuality === 'full' && this.busy && this.again) { /* 이미 대기 중인 full 유지 */ }
-    else this.wantQuality = quality === 'full' || !this.busy ? quality : (this.wantQuality === 'full' ? 'full' : 'draft');
-    if (quality === 'full') this.wantQuality = 'full';
+    this.wantQuality = quality; // 가장 최근 요청이 우선 (드래그 중엔 draft, 놓으면 full)
     if (this.busy) { this.again = true; return; }
     this.runRender();
   }
@@ -219,7 +270,6 @@ export class Editor {
         if (res.hist) { this.hist = res.hist; this.onHist && this.onHist(res.hist); }
         this.setBaseFromResult(res, q, doc);
         if (this.stats && !this.stats.hidden) this.stats.textContent = `${res.w}×${res.h} · ${Math.round(res.ms)}ms · ${q}`;
-        if (q === 'full' && !this.again) this.wantQuality = 'full';
       } while (this.again);
     } catch (e) {
       console.error(e);
@@ -433,6 +483,7 @@ export class Editor {
     }
     const key = uid('a');
     this.assets.set(key, { src, width: src.width, height: src.height });
+    if (blobOrBitmap instanceof Blob) Drafts.put('asset:' + key, blobOrBitmap);
     return key;
   }
 
@@ -475,28 +526,61 @@ export class Editor {
   }
 
   // ------------------------------------------------------------ 내보내기
+  /** 지정 크기(doc.out)에 맞춰 최종 캔버스를 채우기/여백/늘이기로 만든다 */
+  finalizeOut(C, out) {
+    const O = document.createElement('canvas');
+    O.width = out.w; O.height = out.h;
+    const c = O.getContext('2d');
+    c.imageSmoothingQuality = 'high';
+    if (out.fit === 'stretch') { c.drawImage(C, 0, 0, out.w, out.h); return O; }
+    const kc = Math.max(out.w / C.width, out.h / C.height), kf = Math.min(out.w / C.width, out.h / C.height);
+    if (out.fit === 'fill') { c.drawImage(C, (out.w - C.width * kc) / 2, (out.h - C.height * kc) / 2, C.width * kc, C.height * kc); return O; }
+    if (Math.abs(out.w / out.h - C.width / C.height) > 0.003) {
+      if (out.bg === 'color') { c.fillStyle = out.color || '#000000'; c.fillRect(0, 0, out.w, out.h); }
+      else { c.save(); c.filter = `blur(${Math.max(6, Math.min(out.w, out.h) * 0.04)}px) brightness(.8)`; c.drawImage(C, (out.w - C.width * kc) / 2, (out.h - C.height * kc) / 2, C.width * kc, C.height * kc); c.restore(); }
+    }
+    c.drawImage(C, (out.w - C.width * kf) / 2, (out.h - C.height * kf) / 2, C.width * kf, C.height * kf);
+    return O;
+  }
+
   async renderExport(spec) {
     const doc = this.store.get();
     const info = this.info;
     const [Wo, Ho] = orientedSize(info.w, info.h, doc.geo);
     const crop = doc.geo.crop;
     const fullW = crop[2] * Wo, fullH = crop[3] * Ho;
+    const frameOn = doc.frame && (doc.frame.pad || doc.frame.bottom || doc.frame.aspect || doc.frame.radius);
+    const out = spec.out || null;
     let scale = 1;
-    if (spec.maxSide) scale = spec.maxSide / Math.max(fullW, fullH);
+    if (out) {
+      const lay = frameLayout(Math.max(1, Math.round(fullW)), Math.max(1, Math.round(fullH)), frameOn ? doc.frame : null);
+      const sx = out.w / lay.W, sy = out.h / lay.H;
+      scale = out.fit === 'fit' ? Math.min(sx, sy) : Math.max(sx, sy);
+    } else if (spec.maxSide) scale = spec.maxSide / Math.max(fullW, fullH);
     else if (spec.scale) scale = spec.scale;
-    scale = Math.min(scale, 4);
+    scale = Math.max(0.02, Math.min(scale, 4));
     const res = await this.engine.render(docForRender(doc), { scale, release: true });
     const base = document.createElement('canvas');
     base.width = res.w; base.height = res.h;
     base.getContext('2d').putImageData(new ImageData(res.data, res.w, res.h), 0, 0);
-    let out = composeDoc(base, doc, this.assets, { crop });
-    const opaque = spec.format === 'image/jpeg';
-    if (opaque) {
-      const c = document.createElement('canvas'); c.width = out.width; c.height = out.height;
-      const x = c.getContext('2d'); x.fillStyle = (doc.bg && doc.bg.type === 'color' && doc.bg.color) || '#ffffff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(out, 0, 0);
-      out = c;
+    await this.ensureFonts(doc);
+    let cv = composeDoc(base, doc, this.assets, { crop });
+    if (out) cv = this.finalizeOut(cv, out);
+    if (spec.format === 'image/jpeg') {
+      const c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height;
+      const x = c.getContext('2d'); x.fillStyle = (doc.bg && doc.bg.type === 'color' && doc.bg.color) || '#ffffff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(cv, 0, 0);
+      cv = c;
     }
-    return out;
+    return cv;
+  }
+
+  /** 텍스트 레이어에 쓰인 번들 폰트가 모두 로드될 때까지 대기 (저장/공유 직전) */
+  async ensureFonts(doc) {
+    try {
+      const jobs = [];
+      for (const L of doc.layers || []) if (L.t === 'text') jobs.push(document.fonts.load(fontCss(L, 40), L.text || 'A'));
+      if (jobs.length) await Promise.all(jobs);
+    } catch (e) { /* 폰트 없이 진행 */ }
   }
 
   async exportBlob(spec) {
@@ -510,20 +594,27 @@ export class Editor {
     if (!this.base) return;
     if (this.tool) this.closeTool(true);
     const s = this.app.settings;
-    const state = { format: s.format || 'image/jpeg', quality: s.quality || 92, size: 'orig' };
+    const state = { format: s.format || 'image/jpeg', quality: s.quality || 92, size: doc0Out(this) ? 'out' : 'orig' };
     const info = this.info;
     const doc = this.store.get();
     const [Wo, Ho] = orientedSize(info.w, info.h, doc.geo);
     const crop = doc.geo.crop;
     const fw = Math.round(crop[2] * Wo), fh = Math.round(crop[3] * Ho);
-    const sizes = [['orig', t('원본', 'Original'), 0], ['4096', '4096', 4096], ['2048', '2048', 2048], ['1080', '1080', 1080], ['720', '720', 720]].filter((x) => x[2] === 0 || x[2] < Math.max(fw, fh));
+    const outSpec = doc.out || null;
+    const sizes = outSpec ? [['out', t('지정 크기', 'Set size'), 0]] : [['orig', t('원본', 'Original'), 0], ['4096', '4096', 4096], ['2048', '2048', 2048], ['1080', '1080', 1080], ['720', '720', 720]].filter((x) => x[2] === 0 || x[2] < Math.max(fw, fh));
+    const customEl = h('input', { class: 'field num', type: 'text', inputMode: 'numeric', placeholder: t('긴 변 px 직접 입력', 'Long side in px'), 'aria-label': t('긴 변 px 직접 입력', 'Long side in px'), style: { maxWidth: '200px' } });
     let modal;
     const dimsEl = h('div', { class: 'sheet-note num' });
+    const hasAlpha = this.info.alpha || (doc.retouch || []).some((o) => o.k === 'cut');
+    const alphaNote = h('p', { class: 'sheet-note' }, t('투명한 영역은 PNG·WebP로 저장해야 유지돼요. JPEG는 흰색으로 채워져요.', 'Transparent areas are kept only in PNG/WebP. JPEG fills them with white.'));
     const upd = () => {
       const sz = sizes.find((x) => x[0] === state.size) || sizes[0];
-      const k = sz[2] ? Math.min(1, sz[2] / Math.max(fw, fh)) : 1;
-      dimsEl.textContent = `${Math.round(fw * k)} × ${Math.round(fh * k)} px`;
+      const cv = parseInt(customEl.value, 10);
+      const side = cv > 0 ? Math.min(8192, cv) : sz[2];
+      const k = side ? Math.min(4, side / Math.max(fw, fh)) : 1;
+      dimsEl.textContent = outSpec ? `${outSpec.w} × ${outSpec.h} px` : `${Math.round(fw * k)} × ${Math.round(fh * k)} px`;
       qS.el.hidden = state.format === 'image/png';
+      alphaNote.hidden = !(hasAlpha && state.format === 'image/jpeg' && !(doc.bg && doc.bg.type !== 'none'));
     };
     const qS = Slider({ label: t('품질', 'Quality'), min: 40, max: 100, value: state.quality, def: 92, unit: '%', onInput: (v) => { state.quality = v; } });
     const fmt = Segmented({ label: t('형식', 'Format'), items: [{ id: 'image/jpeg', label: 'JPEG' }, { id: 'image/png', label: 'PNG' }, { id: 'image/webp', label: 'WebP' }], value: state.format, onChange: (v) => { state.format = v; upd(); } });
@@ -534,7 +625,8 @@ export class Editor {
       const lab = saveB.textContent; saveB.textContent = t('저장 중…', 'Saving…');
       try {
         const sz = sizes.find((x) => x[0] === state.size) || sizes[0];
-        const { blob } = await this.exportBlob({ format: state.format, quality: state.quality / 100, maxSide: sz[2] || 0 });
+        const cvv = parseInt(customEl.value, 10);
+        const { blob } = await this.exportBlob({ format: state.format, quality: state.quality / 100, out: outSpec || undefined, maxSide: outSpec ? 0 : (cvv > 0 ? Math.min(8192, cvv) : (sz[2] || 0)) });
         const ext = state.format === 'image/png' ? 'png' : state.format === 'image/webp' ? 'webp' : 'jpg';
         const stamp = new Date(); const pad = (n) => String(n).padStart(2, '0');
         const name = `ImageFix_${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}_${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}.${ext}`;
@@ -554,7 +646,8 @@ export class Editor {
     modal = openModal({
       title: t('저장', 'Save'),
       build: (body) => {
-        body.append(h('div', { class: 'sheet-sec' }, t('형식', 'Format')), fmt.el, qS.el, h('div', { class: 'sheet-sec' }, t('크기', 'Size')), sizeChips.el, dimsEl);
+        body.append(h('div', { class: 'sheet-sec' }, t('형식', 'Format')), fmt.el, qS.el, h('div', { class: 'sheet-sec' }, t('크기', 'Size')), outSpec ? h('p', { class: 'sheet-note' }, t('크기 도구에서 지정한 크기로 저장해요.', 'Saved at the size set in the Size tool.')) : sizeChips.el, outSpec ? null : customEl, dimsEl, alphaNote);
+        customEl.addEventListener('input', () => { upd(); });
         body.append(h('div', { class: 'row', style: { marginTop: '8px' } },
           h('button', { class: 'btn outlined grow', type: 'button', 'data-act': 'share', onClick: () => run(true) }, icon('share-2'), t('공유', 'Share')),
           h('button', { class: 'btn filled grow', type: 'button', 'data-act': 'save', onClick: () => run(false) }, icon('download'), t('저장', 'Save'))));

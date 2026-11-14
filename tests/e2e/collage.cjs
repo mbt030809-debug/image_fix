@@ -1,0 +1,31 @@
+const path = require('path');
+const { launch, close } = require('./lib.cjs');
+const FIX = path.resolve(__dirname, '../fixtures');
+(async () => {
+  const h = await launch();
+  const { page } = h;
+  await h.shot('c0_home');
+  const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('.tile >> text=콜라주')]);
+  await fc.setFiles([path.join(FIX, 'landscape.jpg'), path.join(FIX, 'portrait.jpg'), path.join(FIX, 'landscape.jpg')]);
+  await page.waitForFunction(() => window.imagefix.screen === 'collage' && window.imagefix.collage.cv.width > 0, null, { timeout: 20000 });
+  await page.waitForTimeout(500);
+  await h.shot('c1_collage');
+  await page.click('.thumb[data-id="3b"]'); await page.waitForTimeout(200);
+  await page.click('.seg button >> text=스타일'); await page.waitForTimeout(200);
+  await page.evaluate(() => { const s = document.querySelector('.sheet .slider'); s.value = 6; s.dispatchEvent(new Event('input', { bubbles: true })); });
+  await page.waitForTimeout(200);
+  await h.shot('c2_style');
+  await page.click('.seg button >> text=사진'); await page.waitForTimeout(200);
+  const cvb = await page.locator('.stage canvas:visible').first().boundingBox();
+  await page.mouse.move(cvb.x + cvb.width * 0.2, cvb.y + cvb.height * 0.25); await page.mouse.down(); await page.mouse.move(cvb.x + cvb.width * 0.3, cvb.y + cvb.height * 0.3, { steps: 4 }); await page.mouse.up();
+  await h.shot('c3_photos');
+  const dl = page.waitForEvent('download', { timeout: 20000 });
+  await page.click('.screen:not([hidden]) .topbar .btn.filled'); const d = await dl; console.log('collage download:', d.suggestedFilename());
+  await page.click('.screen:not([hidden]) .topbar .btn.tonal'); // 편집
+  await page.waitForFunction(() => window.imagefix.screen === 'editor' && window.imagefix.editor.base, null, { timeout: 20000 });
+  await page.waitForTimeout(600);
+  await h.shot('c4_to_editor');
+  console.log('editor source:', JSON.stringify(await page.evaluate(() => window.imagefix.editor.info)));
+  console.log('errors:', h.errors.join('\n') || 'none');
+  await close(h);
+})().catch((e) => { console.error(e); process.exit(1); });

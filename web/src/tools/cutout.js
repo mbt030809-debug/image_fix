@@ -6,6 +6,7 @@ import { Segmented, Chips, Slider, Btn, IconBtn, toast } from '../ui/components.
 import { ColorField } from './colorfield.js';
 import { contentToSource } from './retouch.js';
 import { bridge } from '../bridge.js';
+import * as Drafts from '../drafts.js';
 
 let keySeq = 1;
 
@@ -14,14 +15,14 @@ export function open(ed, body) {
   const info = ed.info;
   const k0 = Math.min(1, 1024 / Math.max(info.w, info.h));
   let mw = Math.round(info.w * k0), mh = Math.round(info.h * k0);
-  const cutOp = () => ed.doc().retouch.find((o) => o.k === 'cut') || null;
-  const st = { mode: 'wand', size: 14, tol: 28, contig: true, feather: 0, grow: 0 };
+  const cutOp = () => ed.doc().retouch.find((o) => o.k === 'cut' || o.k === 'bgblur') || null;
+  const st = { mode: 'wand', size: 14, tol: 28, contig: true, feather: 0, grow: 0, target: 'cut', blur: 60 };
   let mask = null, cur = null, last = 0, cursor = null, busy = false;
 
   function loadMask() {
     const op = cutOp();
     const m = op && ed.masks.get(op.mask);
-    if (m) { mw = m.w; mh = m.h; mask = Uint8Array.from(m.data); st.feather = op.feather || 0; st.grow = op.grow || 0; }
+    if (m) { mw = m.w; mh = m.h; mask = Uint8Array.from(m.data); st.feather = op.feather || 0; st.grow = op.grow || 0; st.target = op.k === 'bgblur' ? 'blur' : 'cut'; if (op.k === 'bgblur') st.blur = op.amount; }
     else { mask = new Uint8Array(mw * mh).fill(255); }
   }
   loadMask();
@@ -30,9 +31,10 @@ export function open(ed, body) {
     const key = commit ? 'cut' + keySeq++ : 'cut-live';
     const copy = mask.slice();
     ed.masks.set(key, { w: mw, h: mh, data: commit ? copy.slice() : copy });
+    if (commit) Drafts.put('mask:' + key, { w: mw, h: mh, data: copy.slice() });
     await ed.engine.setAsset(key, 'mask', { w: mw, h: mh, buffer: copy.buffer });
-    const op = { k: 'cut', mask: key, feather: st.feather, grow: st.grow };
-    const apply = (d) => setIn(d, 'retouch', [...d.retouch.filter((o) => o.k !== 'cut'), op]);
+    const op = st.target === 'blur' ? { k: 'bgblur', mask: key, feather: st.feather, grow: st.grow, amount: st.blur } : { k: 'cut', mask: key, feather: st.feather, grow: st.grow };
+    const apply = (d) => setIn(d, 'retouch', [...d.retouch.filter((o) => o.k !== 'cut' && o.k !== 'bgblur'), op]);
     if (commit) ed.apply(apply, label || t('배경 제거', 'Remove background')); else ed.preview(apply);
   }
   const isFullKeep = () => { for (let i = 0; i < mask.length; i++) if (mask[i] !== 255) return false; return true; };
@@ -51,6 +53,8 @@ export function open(ed, body) {
 
   function renderCtl() {
     ctl.replaceChildren();
+    ctl.append(Segmented({ label: t('배경 처리', 'Background'), items: [{ id: 'cut', label: t('배경 제거', 'Remove') }, { id: 'blur', label: t('배경 흐리게', 'Blur') }], value: st.target, onChange: (v) => { st.target = v; if (cutOp()) push(true, t('배경 처리', 'Background')); renderCtl(); renderBg(); } }).el);
+    if (st.target === 'blur') ctl.append(Slider({ label: t('흐림 정도', 'Blur amount'), min: 5, max: 100, value: st.blur, def: 60, bipolar: false, onInput: (v) => { st.blur = v; if (cutOp()) push(false); }, onChange: () => { if (cutOp()) push(true, t('배경 흐림', 'Background blur')); } }).el);
     const auto = Btn(t('자동 (단색 배경)', 'Auto (plain background)'), 'tonal', () => runWand({ auto: true, tol: st.tol }, (bg) => { for (let i = 0; i < mask.length; i++) mask[i] = bg[i] ? 0 : 255; }), 'wand-sparkles');
     ctl.append(auto);
     if (st.mode === 'wand') {
@@ -65,11 +69,12 @@ export function open(ed, body) {
       Slider({ label: t('경계 넓히기/좁히기', 'Grow / shrink edge'), min: -100, max: 100, value: st.grow, def: 0, onInput: (v) => { st.grow = v; if (cutOp()) push(false); }, onChange: () => { if (cutOp()) push(true, t('경계', 'Edge')); } }).el,
       h('div', { class: 'row wrap' },
         Btn(t('선택 반전', 'Invert'), 'outlined', () => { for (let i = 0; i < mask.length; i++) mask[i] = 255 - mask[i]; push(true); }, 'eclipse'),
-        Btn(t('되돌리기', 'Reset'), 'outlined', () => { ed.apply((d) => setIn(d, 'retouch', d.retouch.filter((o) => o.k !== 'cut')), t('배경 복원', 'Restore')); loadMask(); mask.fill(255); }, 'refresh-cw')));
+        Btn(t('되돌리기', 'Reset'), 'outlined', () => { ed.apply((d) => setIn(d, 'retouch', d.retouch.filter((o) => o.k !== 'cut' && o.k !== 'bgblur')), t('배경 복원', 'Restore')); loadMask(); mask.fill(255); }, 'refresh-cw')));
   }
 
   function renderBg() {
     bgBox.replaceChildren();
+    if (st.target === 'blur') return;
     const bg = ed.doc().bg || { type: 'none' };
     const chips = Chips({ label: t('배경', 'Background'), items: [{ id: 'none', label: t('투명', 'Transparent') }, { id: 'color', label: t('단색', 'Solid') }, { id: 'gradient', label: t('그라데이션', 'Gradient') }, { id: 'image', label: t('사진', 'Photo') }], value: bg.type, onSelect: async (id) => {
       if (id === 'image') {

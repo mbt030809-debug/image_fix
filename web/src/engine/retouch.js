@@ -25,6 +25,7 @@ function extractRegion(img, x0, y0, w, h) {
 }
 
 // ------------------------------------------------------------ 복제 / 치유
+// 치유: 소스 질감은 가져오고, 색/밝기는 브러시 경계(바깥 고리)의 차이를 안쪽으로 부드럽게 퍼뜨려 맞춘다(푸아송 유사).
 function applyClone(img, op) {
   const { w: W, h: H, d } = img;
   const mn = Math.min(W, H);
@@ -35,15 +36,25 @@ function applyClone(img, op) {
   const heal = op.mode === 'heal';
   const opacity = op.op == null ? 1 : op.op;
   const snap = { w: W, h: H, d: new Uint8ClampedArray(d) };
-  let lowD = null, lowS = null;
-  const margin = Math.ceil(rpx * 0.9);
-  const rx0 = reg.x0 - margin, ry0 = reg.y0 - margin, rw = reg.w + margin * 2, rh = reg.h + margin * 2;
+  let off = null, rx0 = 0, ry0 = 0, rw = 0, rh = 0;
   if (heal) {
-    const sigma = Math.max(1.2, rpx * 0.45);
-    lowD = blurRGBA(extractRegion(snap, rx0, ry0, rw, rh), sigma);
-    lowS = blurRGBA(extractRegion(snap, rx0 + ox, ry0 + oy, rw, rh), sigma);
+    const margin = Math.max(4, Math.ceil(rpx * 0.5));
+    rx0 = reg.x0 - margin; ry0 = reg.y0 - margin; rw = reg.w + margin * 2; rh = reg.h + margin * 2;
+    const dest = extractRegion(snap, rx0, ry0, rw, rh);
+    const srcR = extractRegion(snap, rx0 + ox, ry0 + oy, rw, rh);
+    const diff = { w: rw, h: rh, d: new Uint8ClampedArray(rw * rh * 4) };
+    const hole = new Uint8Array(rw * rh);
+    for (let y = 0; y < rh; y++) {
+      for (let x = 0; x < rw; x++) {
+        const i = y * rw + x, j = i * 4;
+        const rxm = x - margin, rym = y - margin;
+        const m = rxm >= 0 && rym >= 0 && rxm < reg.w && rym < reg.h ? reg.m[rym * reg.w + rxm] : 0;
+        if (m > 0.02) hole[i] = 1;
+        diff.d[j] = dest.d[j] - srcR.d[j] + 128; diff.d[j + 1] = dest.d[j + 1] - srcR.d[j + 1] + 128; diff.d[j + 2] = dest.d[j + 2] - srcR.d[j + 2] + 128; diff.d[j + 3] = 255;
+      }
+    }
+    off = inpaintRegion(diff, hole); // 안쪽 차이를 경계에서 보간
   }
-  const tmp = [0, 0, 0, 0];
   for (let y = 0; y < reg.h; y++) {
     for (let x = 0; x < reg.w; x++) {
       const m = reg.m[y * reg.w + x] * opacity;
@@ -53,15 +64,14 @@ function applyClone(img, op) {
       const si = (sy * W + sx) * 4, di = (gy * W + gx) * 4;
       let r = snap.d[si], g = snap.d[si + 1], b = snap.d[si + 2];
       if (heal) {
-        const li = ((y + margin) * rw + (x + margin)) * 4;
-        r += lowD[li] - lowS[li]; g += lowD[li + 1] - lowS[li + 1]; b += lowD[li + 2] - lowS[li + 2];
+        const li = ((y + (reg.y0 - ry0)) * rw + (x + (reg.x0 - rx0))) * 3;
+        r += off[li] - 128; g += off[li + 1] - 128; b += off[li + 2] - 128;
       }
       d[di] = clamp(d[di] + (r - d[di]) * m, 0, 255);
       d[di + 1] = clamp(d[di + 1] + (g - d[di + 1]) * m, 0, 255);
       d[di + 2] = clamp(d[di + 2] + (b - d[di + 2]) * m, 0, 255);
     }
   }
-  void tmp;
 }
 
 // ------------------------------------------------------------ 지우기 (푸시-풀 인페인팅 + 질감 노이즈)
@@ -220,6 +230,7 @@ function applyLiquifyGroup(img, ops) {
             case 'bloat': { const f = wgt * str * 0.06; dx[k] += ex * f; dy[k] += ey * f; break; }  // out(x)=in(x+D): 중심 쪽을 가져와 확대
             case 'pinch': { const f = wgt * str * 0.06; dx[k] -= ex * f; dy[k] -= ey * f; break; }
             case 'twirl': { const a = wgt * str * 0.12, c = Math.cos(a), s = Math.sin(a); dx[k] += ex * c - ey * s - ex; dy[k] += ex * s + ey * c - ey; break; }
+            case 'twirlL': { const a = -wgt * str * 0.12, c = Math.cos(a), s = Math.sin(a); dx[k] += ex * c - ey * s - ex; dy[k] += ex * s + ey * c - ey; break; }
             case 'recon': dx[k] *= 1 - wgt * str * 0.25; dy[k] *= 1 - wgt * str * 0.25; break;
             default: break;
           }
@@ -275,6 +286,35 @@ function applyCut(img, op, assets) {
   }
 }
 
+function sampleMask(pm, W, H) {
+  const out = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) {
+    const fy = Math.max(0, Math.min(pm.h - 1, ((y + 0.5) / H) * pm.h - 0.5));
+    const y0 = Math.floor(fy), y1 = Math.min(pm.h - 1, y0 + 1), ty = fy - y0;
+    for (let x = 0; x < W; x++) {
+      const fx = Math.max(0, Math.min(pm.w - 1, ((x + 0.5) / W) * pm.w - 0.5));
+      const x0 = Math.floor(fx), x1 = Math.min(pm.w - 1, x0 + 1), tx = fx - x0;
+      out[y * W + x] = (pm.m[y0 * pm.w + x0] * (1 - tx) + pm.m[y0 * pm.w + x1] * tx) * (1 - ty) + (pm.m[y1 * pm.w + x0] * (1 - tx) + pm.m[y1 * pm.w + x1] * tx) * ty;
+    }
+  }
+  return out;
+}
+
+/** 배경 흐리게: 마스크(255=피사체)가 아닌 영역만 블러 */
+function applyBgBlur(img, op, assets) {
+  const asset = assets && assets.get(op.mask);
+  if (!asset || !(op.amount > 0)) return;
+  const { w: W, h: H, d } = img;
+  const mn = Math.min(W, H);
+  const pm = prepareCutMask(asset, ((op.feather || 0) / 100) * 0.02 * Math.min(asset.w, asset.h), op.grow || 0);
+  const m = sampleMask(pm, W, H);
+  const blurred = blurRGBA(img, Math.max(1, (op.amount / 100) * 0.035 * mn));
+  for (let i = 0, j = 0; i < W * H; i++, j += 4) {
+    const k = m[i];
+    d[j] = blurred[j] + (d[j] - blurred[j]) * k; d[j + 1] = blurred[j + 1] + (d[j + 1] - blurred[j + 1]) * k; d[j + 2] = blurred[j + 2] + (d[j + 2] - blurred[j + 2]) * k;
+  }
+}
+
 /** 리터치 연산 목록을 순서대로 적용 (img 는 호출자가 복사본으로 넘겨야 함) */
 export function applyRetouch(img, ops, assets) {
   if (!ops || !ops.length) return img;
@@ -290,6 +330,7 @@ export function applyRetouch(img, ops, assets) {
     if (op.k === 'clone') applyClone(img, op);
     else if (op.k === 'erase') applyErase(img, op);
     else if (op.k === 'cut') applyCut(img, op, assets);
+    else if (op.k === 'bgblur') applyBgBlur(img, op, assets);
     i++;
   }
   return img;

@@ -40,6 +40,7 @@ export function open(ed, body) {
 
     if (tab === 'font') {
       const fonts = Chips({ label: t('글꼴', 'Font'), items: Object.entries(FONTS).map(([k, f]) => ({ id: k, label: t(f.ko, f.en) })), value: L.font || 'sans', onSelect: (k) => upd({ font: k }) });
+      for (const [k, f] of Object.entries(FONTS)) { const b = fonts.btn(k); if (b) b.style.fontFamily = f.stack; }
       const styles = h('div', { class: 'chips wrap' });
       const tog = (key, ic, lab) => { const b = h('button', { class: 'chip', type: 'button', 'aria-pressed': String(!!L[key]), 'aria-label': lab }, icon(ic, 'sm'), lab); b.addEventListener('click', () => { const on = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', String(on)); upd({ [key]: on }); }); return b; };
       styles.append(tog('bold', 'bold', t('굵게', 'Bold')), tog('italic', 'italic', t('기울임', 'Italic')), tog('underline', 'underline', t('밑줄', 'Underline')), tog('strike', 'strikethrough', t('취소선', 'Strike')));

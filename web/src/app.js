@@ -3,7 +3,9 @@ import { h, icon, ensureSprite } from './ui/dom.js';
 import { t, initLang, setLang, getLang } from './i18n.js';
 import { Engine } from './engine/client.js';
 import { Editor } from './editor.js';
+import { Collage } from './collage.js';
 import { bridge } from './bridge.js';
+import * as Drafts from './drafts.js';
 import { toast, openModal, Segmented, Switch, Chips, Btn, Slider, handleBack, confirmDialog } from './ui/components.js';
 
 const SETTINGS_KEY = 'imagefix.settings';
@@ -33,10 +35,12 @@ export class App {
     this.editor = new Editor(this);
     this.editor.el.classList.add('screen');
     this.editor.el.hidden = true;
-    root.append(this.homeEl, this.editor.el);
+    this.collage = new Collage(this);
+    root.append(this.homeEl, this.editor.el, this.collage.el);
     window.__onBack = () => this.onBack();
-    window.__onPause = () => {};
-    bridge.onImages((files) => this.openFiles(files));
+    window.__onPause = () => { this.editor.flushDraft(); };
+    this.refreshDraftCard();
+    bridge.onImages((files) => { if (this.pendingCollage) { this.pendingCollage = false; this.collage.open(files); } else this.openFiles(files); });
     window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (this.settings.theme === 'system') this.applyTheme(); });
   }
 
@@ -68,10 +72,14 @@ export class App {
       const cam = h('button', { class: 'tile', type: 'button' }, icon('camera', 'lg'), h('b', null, t('카메라', 'Camera')), h('span', null, t('바로 촬영해서 편집', 'Shoot and edit')));
       cam.addEventListener('click', () => bridge.takePhoto()); tiles.push(cam);
     }
+    const col = h('button', { class: 'tile', type: 'button' }, icon('layout-grid', 'lg'), h('b', null, t('콜라주', 'Collage')), h('span', null, t('여러 장을 한 장으로', 'Combine several photos')));
+    col.addEventListener('click', () => { this.pendingCollage = true; bridge.pickImages(true); }); tiles.push(col);
     const blank = h('button', { class: 'tile', type: 'button' }, icon('square-dashed', 'lg'), h('b', null, t('빈 캔버스', 'Blank canvas')), h('span', null, t('텍스트·스티커로 디자인', 'Design with text & stickers')));
     blank.addEventListener('click', () => this.openBlankDialog()); tiles.push(blank);
+    this.draftCard = h('div', { hidden: true });
     const wrap = h('div', { class: 'wrap' },
       h('header', null, h('div', { class: 'brand' }, logo, h('span', { translate: 'no' }, 'ImageFix')), settingsBtn),
+      this.draftCard,
       h('section', { class: 'hero' }, h('h1', null, t('편집할 사진을 선택하세요', 'Choose a photo to edit')), h('p', null, t('자르기, 보정, 필터부터 텍스트·스티커·리터치까지. 모든 편집은 이 기기 안에서만 처리돼요.', 'Crop, adjust, filters, text, stickers and retouch. Everything is processed on this device.')), pick),
       h('div', { class: 'tiles' }, ...tiles),
       h('p', { class: 'foot' }, t('인터넷 권한 없이 동작해요 · 사진은 기기 밖으로 나가지 않아요', 'Works without internet permission · your photos never leave the device')));
@@ -94,7 +102,8 @@ export class App {
           const cv = document.createElement('canvas'); cv.width = w; cv.height = hh;
           const c = cv.getContext('2d'); c.fillStyle = color; c.fillRect(0, 0, w, hh);
           const id = c.getImageData(0, 0, w, hh);
-          await this.editor.openBuffer(w, hh, id.data.buffer, 'canvas');
+          const blob = await new Promise((r) => cv.toBlob(r, 'image/png'));
+          await this.editor.openBuffer(w, hh, id.data.buffer, 'canvas', blob);
           this.showEditor();
         })));
     } });
@@ -116,13 +125,44 @@ export class App {
         motion.el, grid.el, stats.el,
         h('div', { class: 'sheet-sec' }, t('정보', 'About')),
         h('div', { class: 'kv' }, h('span', null, t('버전', 'Version')), h('b', null, VERSION)),
-        h('p', { class: 'sheet-note' }, t('아이콘: Lucide (ISC License). 인터넷 권한이 없어 사진이 기기 밖으로 나가지 않아요.', 'Icons: Lucide (ISC License). The app has no internet permission, so photos never leave the device.')));
+        h('p', { class: 'sheet-note' }, t('아이콘: Lucide (ISC), 폰트: SIL OFL 1.1. 인터넷 권한이 없어 사진이 기기 밖으로 나가지 않아요.', 'Icons: Lucide (ISC), fonts: SIL OFL 1.1. The app has no internet permission, so photos never leave the device.')));
     } });
   }
 
+  async refreshDraftCard() {
+    const d = await Drafts.loadDraft();
+    this.draftCard.replaceChildren();
+    this.draftCard.hidden = !d;
+    if (!d) return;
+    const when = new Date(d.rec.ts || Date.now());
+    const label = `${when.getMonth() + 1}/${when.getDate()} ${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`;
+    const b = h('button', { class: 'tile', type: 'button', style: { flexDirection: 'row', alignItems: 'center', width: '100%' } },
+      d.rec.thumb ? h('img', { src: d.rec.thumb, alt: '', style: { width: '56px', height: '56px', objectFit: 'cover', borderRadius: '8px', flex: 'none' } }) : icon('history', 'lg'),
+      h('div', { style: { minWidth: 0 } }, h('b', null, t('이어서 편집하기', 'Continue editing')), h('br'), h('span', null, `${d.rec.name || ''} · ${label}`)));
+    b.addEventListener('click', () => this.restoreDraft(d));
+    this.draftCard.append(b);
+  }
+
+  async restoreDraft(d) {
+    try {
+      this.showEditor();
+      this.editor.loadingEl.hidden = false;
+      const file = new File([d.src.blob], (d.src.name || 'image') + '.jpg', { type: d.src.blob.type || 'image/jpeg' });
+      const bmp = await decodeFile(file);
+      await this.editor.openBitmap(bmp, d.src.name || 'image', d.src.blob);
+      await this.editor.restoreDoc(d.rec);
+      toast(t('이전 작업을 불러왔어요 (실행 취소 기록은 초기화돼요)', 'Restored your last session (undo history is reset)'));
+    } catch (e) { console.error(e); this.goHome(true); toast(t('이전 작업을 불러오지 못했어요.', "Couldn't restore the last session.")); }
+  }
+
   // ------------------------------------------------------------ 화면 전환 / 열기
-  showEditor() { this.screen = 'editor'; this.homeEl.hidden = true; this.editor.el.hidden = false; this.editor.stats.hidden = !this.settings.showStats; requestAnimationFrame(() => this.editor.view.resize()); }
-  goHome() { this.screen = 'home'; this.editor.closeTool(false); this.editor.el.hidden = true; this.homeEl.hidden = false; }
+  showCollage() { this.screen = 'collage'; this.homeEl.hidden = true; this.editor.el.hidden = true; this.collage.el.hidden = false; requestAnimationFrame(() => this.collage.layoutCanvas()); }
+  showEditor() { this.screen = 'editor'; this.homeEl.hidden = true; this.collage.el.hidden = true; this.editor.el.hidden = false; this.editor.stats.hidden = !this.settings.showStats; requestAnimationFrame(() => this.editor.view.resize()); }
+  goHome(keepDraft) {
+    this.screen = 'home'; this.editor.closeTool(false); this.editor.el.hidden = true; this.collage.el.hidden = true; this.homeEl.hidden = false;
+    clearTimeout(this.editor.draftT);
+    if (keepDraft) this.refreshDraftCard(); else Drafts.clearAll().then(() => this.refreshDraftCard());
+  }
 
   async openFiles(files) {
     if (!files || !files.length) return;
@@ -131,11 +171,11 @@ export class App {
       this.showEditor();
       this.editor.loadingEl.hidden = false;
       const bmp = await decodeFile(f);
-      await this.editor.openBitmap(bmp, f.name);
+      await this.editor.openBitmap(bmp, f.name, f);
       if (files.length > 1) toast(t('첫 번째 사진을 열었어요', 'Opened the first photo'));
     } catch (e) {
       console.error(e);
-      this.goHome();
+      this.goHome(true);
       toast(t('사진을 열 수 없어요. 다른 사진을 선택해 보세요.', "Can't open this photo. Try another one."));
     }
   }
@@ -143,6 +183,7 @@ export class App {
   onBack() {
     if (handleBack()) return true;
     if (this.screen === 'editor') return this.editor.onBack();
+    if (this.screen === 'collage') { this.collage.close(); return true; }
     if (this.exitArmed) return false;
     this.exitArmed = true;
     toast(t('한 번 더 누르면 종료돼요', 'Press back again to exit'), { duration: 2000 });

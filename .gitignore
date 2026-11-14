@@ -3,3 +3,8 @@ node_modules/
 *.part
 .DS_Store
 tests/out/
+.gradle/
+local.properties
+app/build/
+*.iml
+.idea/

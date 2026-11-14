@@ -469,6 +469,11 @@ export function developImage(img, A, opts = {}) {
         b = cB[b <= 0 ? 0 : b >= 1 ? CN : (b * CN + 0.5) | 0];
       }
 
+      if (bwAmt > 0) {
+        const yb = bwR * r + bwG * g + bwB * b;
+        r += (yb - r) * bwAmt; g += (yb - g) * bwAmt; b += (yb - b) * bwAmt;
+      }
+
       if (splitOn) {
         const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
         if (tHi) {
@@ -479,11 +484,6 @@ export function developImage(img, A, opts = {}) {
           const wL = 1 - smoothstep(pivot - 0.4, pivot + 0.25, y);
           r += tLo[0] * wL; g += tLo[1] * wL; b += tLo[2] * wL;
         }
-      }
-
-      if (bwAmt > 0) {
-        const yb = bwR * r + bwG * g + bwB * b;
-        r += (yb - r) * bwAmt; g += (yb - g) * bwAmt; b += (yb - b) * bwAmt;
       }
 
       let nr = r * 255 + 0.5, ng = g * 255 + 0.5, nb = b * 255 + 0.5;

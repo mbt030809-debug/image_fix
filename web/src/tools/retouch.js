@@ -21,7 +21,7 @@ export function open(ed, body) {
   let src = null, offset = null, setSrc = false, cur = null, last = 0, trail = [], cursor = null;
   const save = () => { ed.app.settings.retouch = { ...st }; ed.app.saveSettings(); };
 
-  const seg = Segmented({ label: t('도구', 'Tool'), items: [{ id: 'heal', label: t('치유', 'Heal') }, { id: 'clone', label: t('복제', 'Clone') }, { id: 'erase', label: t('지우기', 'Erase') }, { id: 'liq', label: t('왜곡', 'Liquify') }], value: st.mode, onChange: (v) => { st.mode = v; save(); renderCtl(); ed.invalidateOverlay(); } });
+  const seg = Segmented({ label: t('도구', 'Tool'), items: [{ id: 'heal', label: t('치유', 'Heal') }, { id: 'clone', label: t('복제', 'Clone') }, { id: 'erase', label: t('지우기', 'Erase') }, { id: 'liq', label: t('유동화', 'Liquify') }], value: st.mode, onChange: (v) => { st.mode = v; save(); renderCtl(); ed.invalidateOverlay(); } });
   const ctl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
   const radius = () => st.size / 300;
 
@@ -34,7 +34,7 @@ export function open(ed, body) {
     } else if (st.mode === 'erase') {
       ctl.append(h('p', { class: 'sheet-note' }, t('지우고 싶은 물체 위를 문지르면 주변 질감으로 채워져요. 작은 물체에 가장 잘 맞아요.', 'Brush over an object to fill it from its surroundings. Works best on small objects.')));
     } else {
-      ctl.append(Chips({ label: t('왜곡 모드', 'Liquify mode'), items: [{ id: 'push', label: t('밀기', 'Push') }, { id: 'bloat', label: t('확대', 'Bloat') }, { id: 'pinch', label: t('축소', 'Pinch') }, { id: 'twirl', label: t('비틀기', 'Twirl') }, { id: 'recon', label: t('복원', 'Restore') }], value: st.liq, onSelect: (v) => { st.liq = v; save(); } }).el, mk(t('강도', 'Strength'), 'str', 5, 100, 60, '%'));
+      ctl.append(h('p', { class: 'sheet-note' }, t('픽셀 유동화: 사진을 손가락으로 밀거나 부풀리고 비틀어 모양을 바꿔요.', 'Pixel liquify: push, bloat, pinch or twirl the photo with your finger.')), Chips({ label: t('유동화 모드', 'Liquify mode'), items: [{ id: 'push', label: t('밀기', 'Push') }, { id: 'bloat', label: t('확대', 'Bloat') }, { id: 'pinch', label: t('축소', 'Pinch') }, { id: 'twirl', label: t('비틀기 ↻', 'Twirl ↻') }, { id: 'twirlL', label: t('비틀기 ↺', 'Twirl ↺') }, { id: 'recon', label: t('복원', 'Restore') }], value: st.liq, onSelect: (v) => { st.liq = v; save(); } }).el, mk(t('강도', 'Strength'), 'str', 5, 100, 60, '%'));
     }
     ctl.append(mk(t('브러시 크기', 'Brush size'), 'size', 1, 60, 8));
     if (st.mode !== 'liq') ctl.append(mk(t('부드러움', 'Softness'), 'soft', 0, 100, 60, '%'));
