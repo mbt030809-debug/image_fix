@@ -13,6 +13,8 @@ run node tools.cjs
 run node bridge.cjs
 run node draft.cjs
 run node collage.cjs
+run node resize.cjs
+run node history.cjs
 run node layouts.cjs
 run node monkey.cjs 1 100
 run node monkey.cjs 2 100 portrait.jpg

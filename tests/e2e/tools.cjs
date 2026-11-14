@@ -37,4 +37,5 @@ async function step(name, fn) { try { await fn(); } catch (e) { fails.push(name 
   console.log('errors:', h.errors.length ? '\n' + h.errors.slice(0, 20).join('\n') : 'none');
   console.log('fails:', fails.length ? '\n' + fails.join('\n') : 'none');
   await close(h);
+  process.exit(fails.length || h.errors.length ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
