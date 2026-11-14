@@ -185,19 +185,21 @@ export class Editor {
     await Drafts.put('doc', { doc: this.store.getBase(), name: this.fileName, ts: Date.now(), thumb: this.makeThumb() });
   }
   /** 저장된 드래프트의 문서/자산을 복원 */
-  async restoreDoc(rec) {
+  async restoreDoc(rec, pre) {
     const doc = JSON.parse(JSON.stringify(rec.doc));
-    const keys = new Set();
-    for (const L of doc.layers || []) if (L.t === 'image') keys.add(L.asset);
-    if (doc.bg && doc.bg.type === 'image') keys.add(doc.bg.asset);
-    for (const k of keys) {
-      const blob = await Drafts.get('asset:' + k);
-      if (blob) { try { const bmp = await createImageBitmap(blob); this.assets.set(k, { src: bmp, width: bmp.width, height: bmp.height }); } catch (e) { /* 건너뜀 */ } }
+    // 사진을 다시 여는 과정이 저장소를 비우므로, 자산은 열기 전에 읽어 둔 것(pre)을 쓰고 다시 저장해 둔다
+    const src = pre || await Drafts.readAssets(doc);
+    for (const [k, blob] of src.assets) {
+      try {
+        const bmp = await createImageBitmap(blob);
+        this.assets.set(k, { src: bmp, width: bmp.width, height: bmp.height });
+        Drafts.put('asset:' + k, blob);
+      } catch (e) { /* 건너뜀 */ }
     }
     for (const op of doc.retouch || []) {
       if (op.k === 'cut' || op.k === 'bgblur') {
-        const m = await Drafts.get('mask:' + op.mask);
-        if (m) { this.masks.set(op.mask, m); await this.engine.setAsset(op.mask, 'mask', { w: m.w, h: m.h, buffer: m.data.slice().buffer }); }
+        const m = src.masks.get(op.mask);
+        if (m) { this.masks.set(op.mask, m); Drafts.put('mask:' + op.mask, m); await this.engine.setAsset(op.mask, 'mask', { w: m.w, h: m.h, buffer: m.data.slice().buffer }); }
         else doc.retouch = doc.retouch.filter((o) => o !== op);
       }
     }
@@ -205,6 +207,7 @@ export class Editor {
     this.store.reset(doc);
     this.store.savedRevision = -1; // 저장되지 않은 상태로 표시
     this.requestRender('full');
+    this.scheduleDraft(); // 복원 직후에도 다시 종료되면 이어서 할 수 있게 문서를 바로 다시 저장
   }
 
   computePreviewSide() {
@@ -470,6 +473,32 @@ export class Editor {
     this.apply((d) => setIn(d, 'layers', [...d.layers, c]), t('레이어 복제', 'Duplicate'));
     this.sel = c.id;
   }
+  /** 캔버스를 그대로 이미지 레이어 자산으로 등록 (AI 수정 패치 등). 초안 저장은 호출자가 Blob 으로 직접 한다 */
+  addCanvasAsset(cv) {
+    const key = uid('a');
+    this.assets.set(key, { src: cv, width: cv.width, height: cv.height });
+    return key;
+  }
+  dropAsset(key) { this.assets.delete(key); }
+
+  /**
+   * 캔버스 정규화 영역(crop=[x,y,w,h])을 보정+레이어+배경까지 합성해 캔버스로 반환(프레임 제외).
+   * 해상도는 작업 원본 기준으로 긴 변 maxLong px 이하(업스케일 없음). 파이프라인 캐시를 비우므로 다음 미리보기는 다시 계산된다.
+   */
+  async renderRegion(crop, maxLong) {
+    const doc = this.store.get();
+    const info = this.info;
+    const [Wo, Ho] = orientedSize(info.w, info.h, doc.geo);
+    const fullW = crop[2] * Wo, fullH = crop[3] * Ho;
+    const scale = Math.max(0.02, Math.min(1, maxLong / Math.max(fullW, fullH)));
+    const res = await this.engine.render(docForRender(doc), { scale, crop, release: true });
+    const base = document.createElement('canvas');
+    base.width = res.w; base.height = res.h;
+    base.getContext('2d').putImageData(new ImageData(res.data, res.w, res.h), 0, 0);
+    await this.ensureFonts(doc);
+    return composeDoc(base, doc, this.assets, { crop, noFrame: true });
+  }
+
   async addImageAsset(blobOrBitmap) {
     let bmp = blobOrBitmap;
     if (!(bmp instanceof ImageBitmap)) bmp = await createImageBitmap(blobOrBitmap, { imageOrientation: 'from-image' });

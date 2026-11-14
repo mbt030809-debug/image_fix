@@ -7,9 +7,10 @@ import { Collage } from './collage.js';
 import { bridge } from './bridge.js';
 import * as Drafts from './drafts.js';
 import { toast, openModal, Segmented, Switch, Chips, Btn, Slider, handleBack, confirmDialog } from './ui/components.js';
+import { openAiSettings, aiConfig } from './tools/aisettings.js';
 
 const SETTINGS_KEY = 'imagefix.settings';
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 
 async function decodeFile(file) {
   const opts = { imageOrientation: 'from-image', premultiplyAlpha: 'none', colorSpaceConversion: 'default' };
@@ -29,6 +30,7 @@ export class App {
     if (this.settings.lang) setLang(this.settings.lang);
     ensureSprite();
     this.applyTheme();
+    aiConfig(this);
     this.engine = new Engine();
     this.screen = 'home';
     this.homeEl = this.buildHome();
@@ -80,9 +82,9 @@ export class App {
     const wrap = h('div', { class: 'wrap' },
       h('header', null, h('div', { class: 'brand' }, logo, h('span', { translate: 'no' }, 'ImageFix')), settingsBtn),
       this.draftCard,
-      h('section', { class: 'hero' }, h('h1', null, t('편집할 사진을 선택하세요', 'Choose a photo to edit')), h('p', null, t('자르기, 보정, 필터부터 텍스트·스티커·리터치까지. 모든 편집은 이 기기 안에서만 처리돼요.', 'Crop, adjust, filters, text, stickers and retouch. Everything is processed on this device.')), pick),
+      h('section', { class: 'hero' }, h('h1', null, t('편집할 사진을 선택하세요', 'Choose a photo to edit')), h('p', null, t('자르기, 보정, 필터부터 텍스트·스티커·리터치까지. 편집은 이 기기 안에서 처리되고, AI 수정을 쓸 때만 선택한 영역이 AI 서버로 가요.', 'Crop, adjust, filters, text, stickers and retouch. Editing runs on this device; only when you use AI edit is the area you select sent to an AI server.')), pick),
       h('div', { class: 'tiles' }, ...tiles),
-      h('p', { class: 'foot' }, t('인터넷 권한 없이 동작해요 · 사진은 기기 밖으로 나가지 않아요', 'Works without internet permission · your photos never leave the device')));
+      h('p', { class: 'foot' }, t('기본은 오프라인 · 인터넷은 AI 수정을 쓸 때만, 선택한 영역만 사용해요', 'Offline by default · the internet is used only for AI edit, and only for the area you select')));
     const el = h('div', { class: 'screen home' }, wrap);
     return el;
   }
@@ -123,9 +125,12 @@ export class App {
         h('div', { class: 'sheet-sec' }, t('작업 해상도 (긴 변 px)', 'Working resolution (long side, px)')), res.el,
         h('p', { class: 'sheet-note' }, t('높을수록 선명하지만 메모리를 더 써요. 보통은 자동을 권장해요.', 'Higher is sharper but uses more memory. Auto is recommended.')),
         motion.el, grid.el, stats.el,
+        h('div', { class: 'sheet-sec' }, t('AI 수정', 'AI edit')),
+        h('p', { class: 'sheet-note' }, bridge.ai.available() ? t('내 OpenAI API 키로 선택한 영역만 AI 에 맡겨요. 키는 기기에 암호화돼 저장돼요.', 'Send only a selected area to AI using your own OpenAI API key. The key is stored encrypted on this device.') : t('AI 수정은 앱(APK)에서만 쓸 수 있어요.', 'AI edit works only in the app (APK).')),
+        bridge.ai.available() ? Btn(t('AI 설정 (키·모델)', 'AI settings (key · model)'), 'tonal', () => openAiSettings(this), 'key-round') : null,
         h('div', { class: 'sheet-sec' }, t('정보', 'About')),
         h('div', { class: 'kv' }, h('span', null, t('버전', 'Version')), h('b', null, VERSION)),
-        h('p', { class: 'sheet-note' }, t('아이콘: Lucide (ISC), 폰트: SIL OFL 1.1. 인터넷 권한이 없어 사진이 기기 밖으로 나가지 않아요.', 'Icons: Lucide (ISC), fonts: SIL OFL 1.1. The app has no internet permission, so photos never leave the device.')));
+        h('p', { class: 'sheet-note' }, t('아이콘: Lucide (ISC), 폰트: SIL OFL 1.1. 인터넷 권한은 AI 수정에만 쓰여요. AI 수정을 쓰지 않으면 사진은 기기 밖으로 나가지 않아요.', 'Icons: Lucide (ISC), fonts: SIL OFL 1.1. The internet permission is used only by AI edit. If you never use AI edit, your photos never leave the device.')));
     } });
   }
 
@@ -149,8 +154,9 @@ export class App {
       this.editor.loadingEl.hidden = false;
       const file = new File([d.src.blob], (d.src.name || 'image') + '.jpg', { type: d.src.blob.type || 'image/jpeg' });
       const bmp = await decodeFile(file);
+      const pre = await Drafts.readAssets(d.rec.doc); // openBitmap 이 저장소를 비우기 전에 자산(레이어 이미지·마스크)을 읽어 둔다
       await this.editor.openBitmap(bmp, d.src.name || 'image', d.src.blob);
-      await this.editor.restoreDoc(d.rec);
+      await this.editor.restoreDoc(d.rec, pre);
       toast(t('이전 작업을 불러왔어요 (실행 취소 기록은 초기화돼요)', 'Restored your last session (undo history is reset)'));
     } catch (e) { console.error(e); this.goHome(true); toast(t('이전 작업을 불러오지 못했어요.', "Couldn't restore the last session.")); }
   }

@@ -99,6 +99,23 @@ export const bridge = {
     return false;
   },
   view(res) { if (A && res && res.uri) A.viewImage(res.uri); },
+  /**
+   * AI 요청 릴레이(네이티브 전용). 웹 페이지는 인터넷에 직접 접근할 수 없고(CSP + 외부 요청 403),
+   * 키는 기기 Keystore 에 암호화돼 있어 JS 로 다시 읽을 수 없다. 네이티브가 허용된 호스트/경로로만 전달한다.
+   */
+  ai: {
+    available() { return !!(A && A.aiInfo); },
+    info() { try { return A && A.aiInfo ? JSON.parse(A.aiInfo()) : null; } catch (e) { return null; } },
+    /** key 가 빈 문자열이면 키는 유지하고 서버 주소만 바꾼다. 성공 true, 실패 시 사유 문자열 */
+    setKey(key, base) { const r = A.aiSetKey(key || '', base || ''); return r === 'OK' ? true : String(r || 'ERR:unknown'); },
+    clearKey() { A.aiClearKey(); },
+    begin(spec) { const id = A.aiBegin(JSON.stringify(spec)); if (!id || String(id).startsWith('ERR:')) throw new Error(id || 'ERR:begin'); return String(id); },
+    chunk(id, b64) { return !!A.aiChunk(id, b64); },
+    send(id) { return !!A.aiSend(id); },
+    status(id) { try { return JSON.parse(A.aiStatus(id)); } catch (e) { return { state: 'error', status: 0, code: 'bad_response' }; } },
+    cancel(id) { try { A.aiCancel(id); } catch (e) { /* noop */ } },
+    release(id) { try { A.aiRelease(id); } catch (e) { /* noop */ } },
+  },
   setBars(hex, darkIcons) { if (A) A.setBars(hex, !!darkIcons); },
   toast(msg) { if (A) A.toast(msg); },
   haptic() { if (A) A.haptic(); },
@@ -106,7 +123,7 @@ export const bridge = {
   exit() { if (A) A.exit(); },
 };
 
-function blobToB64(blob) {
+export function blobToB64(blob) {
   return new Promise((resolve, reject) => {
     const fr = new FileReader();
     fr.onload = () => { const s = String(fr.result); resolve(s.slice(s.indexOf(',') + 1)); };

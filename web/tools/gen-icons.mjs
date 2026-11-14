@@ -14,7 +14,8 @@ scan-line link unlink clipboard-paste upload scale ruler square-pen case-sensiti
 flip-horizontal-2 expand shrink repeat panel-top columns-2 rows-2 circle-dashed square-dashed badge-check list-restart combine image-down file-image
 move-diagonal-2 bring-to-front send-to-back copy-plus eye-closed hexagon pentagon octagon cloud triangle-right diamond ellipsis-vertical grip-vertical
 layers-3 monitor-smartphone shield-check heart-handshake glass-water flashlight lightbulb notebook-pen text-cursor circle-user sticker pizza coffee
-cat dog flower-2 music gift cake party-popper rocket crown gem skull ghost angry laugh frown meh annoyed`.split(/\s+/).filter(Boolean);
+cat dog flower-2 music gift cake party-popper rocket crown gem skull ghost angry laugh frown meh annoyed
+lasso-select key-round triangle-alert rectangle-horizontal bot send ban`.split(/\s+/).filter(Boolean);
 const out = {}; const missing = [];
 for (const n of new Set(names)) {
   const f = path.join(dir, n + '.svg');

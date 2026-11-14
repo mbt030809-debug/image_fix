@@ -1,0 +1,83 @@
+// AI 요청 실행: 네이티브 릴레이로 업로드 → 폴링 → 결과(PNG Blob) 수신
+import { bridge, blobToB64 } from '../bridge.js';
+
+const CHUNK = 192 * 1024;
+
+export class AiError extends Error {
+  constructor(info) {
+    super((info && (info.message || info.code)) || 'ai error');
+    this.info = info || {};
+  }
+}
+
+/**
+ * req: {method, path, contentType?, body?: Blob}
+ * opts: {signal?: AbortSignal, onPhase?: (phase)=>void, timeoutMs?: number}
+ * 반환 {id, status} (state==='done'). 결과를 다 쓴 뒤 bridge.ai.release(id) 는 호출자 책임.
+ */
+export async function runRelay(req, opts = {}) {
+  const { onPhase, signal, timeoutMs = 360000 } = opts;
+  const body = req.body || null;
+  const spec = { method: req.method, path: req.path };
+  if (body) { spec.type = req.contentType; spec.len = body.size; }
+  if (signal && signal.aborted) throw new AiError({ code: 'cancelled' });
+  const id = bridge.ai.begin(spec);
+  let finished = false;
+  const abort = () => { if (!finished) bridge.ai.cancel(id); };
+  if (signal) signal.addEventListener('abort', abort, { once: true });
+  try {
+    onPhase && onPhase('upload');
+    if (body) {
+      for (let off = 0; off < body.size; off += CHUNK) {
+        if (signal && signal.aborted) throw new AiError({ code: 'cancelled' });
+        const b64 = await blobToB64(body.slice(off, off + CHUNK));
+        if (!bridge.ai.chunk(id, b64)) throw new AiError({ code: 'upload', message: 'chunk rejected' });
+      }
+    }
+    if (signal && signal.aborted) throw new AiError({ code: 'cancelled' });
+    if (!bridge.ai.send(id)) throw new AiError({ code: 'upload', message: 'send rejected' });
+    onPhase && onPhase('wait');
+    const t0 = Date.now();
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 350));
+      const st = bridge.ai.status(id);
+      if (st.state === 'done') { finished = true; return { id, status: st }; }
+      if (st.state === 'cancelled') throw new AiError({ code: 'cancelled' });
+      if (st.state === 'error') throw new AiError(st);
+      if (Date.now() - t0 > timeoutMs) { bridge.ai.cancel(id); throw new AiError({ code: 'timeout' }); }
+    }
+  } catch (e) {
+    finished = true;
+    bridge.ai.release(id);
+    throw e;
+  } finally {
+    if (signal) signal.removeEventListener('abort', abort);
+  }
+}
+
+export async function fetchResult(id, i) {
+  const res = await fetch(`/__ai/${id}/${i}`, { cache: 'no-store' });
+  if (!res.ok) throw new AiError({ code: 'bad_response', status: res.status });
+  return res.blob();
+}
+
+/** 이미지 편집 요청 → 결과 이미지 Blob 배열 */
+export async function editImage(req, opts) {
+  const { id, status } = await runRelay(req, opts);
+  try {
+    const n = Math.max(0, Math.min(10, status.n | 0));
+    if (!n) throw new AiError({ code: 'bad_response', message: 'no images' });
+    const out = [];
+    for (let i = 0; i < n; i++) out.push(await fetchResult(id, i));
+    return out;
+  } finally {
+    bridge.ai.release(id);
+  }
+}
+
+/** 키 확인 + 사용 가능한 모델 id 목록 */
+export async function listModelIds(opts) {
+  const { id, status } = await runRelay({ method: 'GET', path: '/models' }, opts);
+  bridge.ai.release(id);
+  return Array.isArray(status.ids) ? status.ids.map(String) : [];
+}

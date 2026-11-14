@@ -62,7 +62,8 @@ import java.util.Map;
 /**
  * ImageFix 쉘: 오프라인 HTML 편집기를 WebView 로 띄우고
  * 갤러리 저장 / 공유 / 파일 선택 / 카메라 / 외부 앱 연결을 담당한다.
- * 편집 로직은 전부 assets/www 의 JS 에 있다. 인터넷 권한 없음.
+ * 편집 로직은 전부 assets/www 의 JS 에 있다. 웹 페이지는 인터넷에 직접 접근할 수 없고(CSP + 외부 요청 403),
+ * INTERNET 권한은 AI 수정 요청을 대신 보내는 {@link AiClient} 만 쓴다(사용자가 키를 넣고 동의했을 때만).
  */
 public class MainActivity extends Activity {
     static final String TAG = "ImageFix";
@@ -95,6 +96,8 @@ public class MainActivity extends Activity {
     private final Map<String, Saver> savers = new HashMap<String, Saver>();
     private int saverSeq = 0;
     private boolean pageReady = false;
+    private KeyVault vault;
+    private AiClient ai;
 
     // ------------------------------------------------------------------ lifecycle
 
@@ -107,6 +110,8 @@ public class MainActivity extends Activity {
         root = new FrameLayout(this);
         root.setBackgroundColor(BG);
         setContentView(root);
+        vault = new KeyVault(this);
+        ai = new AiClient(vault);
         collect(getIntent());
         createWebView();
         web.loadUrl(ORIGIN + "/index.html");
@@ -317,6 +322,7 @@ public class MainActivity extends Activity {
         String path = u.getPath();
         if (path == null || path.length() == 0 || "/".equals(path)) path = "/index.html";
         if (path.startsWith("/__shared/")) return servePending(u);
+        if (path.startsWith("/__ai/")) return serveAi(u);
         if (path.contains("..") || path.contains("//")) return status(404, "Not Found");
         String mime = mimeFor(path);
         try {
@@ -383,6 +389,28 @@ public class MainActivity extends Activity {
             Log.w(TAG, "serve shared failed", e);
             return status(500, "Error");
         }
+    }
+
+    /** AI 결과 이미지: /__ai/&lt;작업id&gt;/&lt;번호&gt; (메모리에서 바로 제공) */
+    private WebResourceResponse serveAi(Uri u) {
+        List<String> seg = u.getPathSegments();
+        if (seg.size() != 3 || ai == null) return status(404, "Not Found");
+        int idx;
+        try {
+            idx = Integer.parseInt(seg.get(2));
+        } catch (NumberFormatException e) {
+            return status(404, "Not Found");
+        }
+        byte[] b = ai.result(seg.get(1), idx);
+        if (b == null || b.length < 12) return status(404, "Not Found");
+        String mime = "application/octet-stream";
+        if ((b[0] & 0xff) == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G') mime = "image/png";
+        else if ((b[0] & 0xff) == 0xff && (b[1] & 0xff) == 0xd8) mime = "image/jpeg";
+        else if (b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F' && b[8] == 'W' && b[9] == 'E' && b[10] == 'B' && b[11] == 'P') mime = "image/webp";
+        Map<String, String> h = new HashMap<String, String>();
+        h.put("Cache-Control", "no-store");
+        h.put("X-Content-Type-Options", "nosniff");
+        return new WebResourceResponse(mime, null, 200, "OK", h, new ByteArrayInputStream(b));
     }
 
     private static String encName(String n) {
@@ -610,6 +638,62 @@ public class MainActivity extends Activity {
             } catch (Throwable e) {
                 return "{}";
             }
+        }
+
+        // ---------------------------------------------------------- AI 릴레이 (AiClient / KeyVault)
+
+        @JavascriptInterface
+        public String aiInfo() {
+            try {
+                JSONObject o = new JSONObject();
+                o.put("v", 1);
+                o.put("hasKey", vault.hasKey());
+                o.put("hint", vault.hint());
+                o.put("base", vault.baseUrl());
+                return o.toString();
+            } catch (Throwable e) {
+                return "{\"v\":1,\"hasKey\":false}";
+            }
+        }
+
+        @JavascriptInterface
+        public String aiSetKey(String key, String base) {
+            return vault.set(key, base);
+        }
+
+        @JavascriptInterface
+        public void aiClearKey() {
+            vault.clear();
+        }
+
+        @JavascriptInterface
+        public String aiBegin(String spec) {
+            return ai.begin(spec);
+        }
+
+        @JavascriptInterface
+        public boolean aiChunk(String id, String b64) {
+            return ai.chunk(id, b64);
+        }
+
+        @JavascriptInterface
+        public boolean aiSend(String id) {
+            return ai.send(id);
+        }
+
+        @JavascriptInterface
+        public String aiStatus(String id) {
+            return ai.status(id);
+        }
+
+        @JavascriptInterface
+        public void aiCancel(String id) {
+            ai.cancel(id);
+        }
+
+        @JavascriptInterface
+        public void aiRelease(String id) {
+            ai.release(id);
         }
 
         @JavascriptInterface

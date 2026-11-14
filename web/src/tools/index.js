@@ -9,6 +9,7 @@ import * as curves from './curves.js';
 import * as effects from './effects.js';
 import * as retouch from './retouch.js';
 import * as brush from './brush.js';
+import * as aiedit from './aiedit.js';
 import * as text from './text.js';
 import * as sticker from './sticker.js';
 import * as draw from './draw.js';
@@ -26,6 +27,7 @@ export const TOOLS = [
   { id: 'effects', icon: 'sparkles', label: () => t('효과', 'Effects'), open: effects.open },
   { id: 'retouch', icon: 'bandage', label: () => t('리터치', 'Retouch'), open: retouch.open },
   { id: 'brush', icon: 'brush', label: () => t('브러시', 'Brush'), open: brush.open },
+  { id: 'ai', icon: 'lasso-select', label: () => t('AI 수정', 'AI edit'), open: aiedit.open },
   { id: 'text', icon: 'type', label: () => t('텍스트', 'Text'), open: text.open },
   { id: 'sticker', icon: 'smile', label: () => t('스티커', 'Stickers'), open: sticker.open },
   { id: 'draw', icon: 'pen-line', label: () => t('그리기', 'Draw'), open: draw.open },

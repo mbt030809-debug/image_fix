@@ -1,8 +1,8 @@
 # ImageFix — 이미지 편집 앱 (Android APK)
 
-사진 보정·필터·자르기부터 텍스트·스티커·리터치·콜라주까지 한 앱에서. **인터넷 권한이 없는 완전 오프라인 앱**이라 사진이 기기 밖으로 나가지 않습니다.
+사진 보정·필터·자르기부터 텍스트·스티커·리터치·콜라주까지 한 앱에서. 기본은 **오프라인**으로 동작하고, 인터넷 권한은 선택 기능인 **AI 수정**(내 OpenAI API 키로 선택한 영역만 전송)에만 쓰입니다. AI 수정을 쓰지 않으면 사진은 기기 밖으로 나가지 않습니다.
 
-- 빌드 날짜: 2026-11-14 · 버전 1.0.0 · Android 8.0(API 26) 이상, WebView 90+ (Play 스토어 자동 업데이트 기준 대부분 충족)
+- 빌드 날짜: 2026-11-14 · 버전 1.1.0 · Android 8.0(API 26) 이상, WebView 90+ (Play 스토어 자동 업데이트 기준 대부분 충족)
 - APK: [`release/ImageFix_2026-11-14.apk`](release/ImageFix_2026-11-14.apk)
 
 ![스크린샷](docs/screenshots_2026-11-14.jpg)
@@ -23,6 +23,7 @@
 | 곡선 | RGB/R/G/B 커브, 점 추가·이동·삭제, 숫자 입력·키보드 보정, 프리셋 |
 | 효과 | 블러(일반·모션·줌·틸트시프트·원형 초점), 모자이크·하프톤·유화·스케치·만화·엠보스·외곽선·포스터·솔라라이즈·듀오톤 등 아트, 글로우·소프트포커스·빛샘·빛망울·눈, 소용돌이·볼록/오목·물결·어안·거울·만화경, 글리치·색수차·RGB 분리·VHS (스택 방식) |
 | 리터치 | 치유, 복제, 지우기(주변 질감으로 채움), **픽셀 유동화**(밀기·확대·축소·비틀기 ↻↺·복원) |
+| AI 수정 | 올가미·브러시·사각형·원형으로 **영역 선택**(추가/빼기/반전/넓히기/부드럽게) → 그 영역(+주변)만 OpenAI 이미지 편집(`gpt-image`)에 요청 → **선택 안쪽에만** 합성되는 비파괴 레이어. 변형 1~3장·적용 강도·다시 생성. 키는 기기 Keystore 에 암호화 저장, 첫 요청 전 동의. 자세한 내용: [`docs/AI_EDIT_2026-11-14.md`](docs/AI_EDIT_2026-11-14.md) |
 | 브러시 | 브러시/선형/원형/색 범위 마스크 + 노출·대비·채도·색온도·선명·흐림·스무딩. 프리셋: 피부 매끄럽게·치아 미백·눈 밝게·적목 제거·컬러 스플래시 |
 | 텍스트 | 글꼴 13종(번들 한글 3종: 블랙한산스·주아·손글씨 펜 + 영문 5종), 색·그라데이션·외곽선·그림자·배경 상자·정렬·자간/줄 간격·혼합 모드 |
 | 스티커 | 이모지, 도형 24종, 내 사진 합성(워터마크·이중 노출) |
@@ -36,10 +37,10 @@
 
 ## 구조
 ```
-app/      Android 쉘(Java): WebView, 가상 오리진 에셋 서빙, MediaStore 저장, 공유/카메라/HEIC 변환 브리지
-web/      편집기 본체(바닐라 JS): engine/(픽셀 파이프라인·워커) · tools/(도구 UI) · ui/(컴포넌트)
+app/      Android 쉘(Java): WebView, 가상 오리진 에셋 서빙, MediaStore 저장, 공유/카메라/HEIC 변환 브리지, AI 릴레이(AiClient·KeyVault)
+web/      편집기 본체(바닐라 JS): engine/(픽셀 파이프라인·워커) · tools/(도구 UI) · ai/(선택·요청 계획·OpenAI 요청) · ui/(컴포넌트)
 scripts/  SDK 없이 APK 빌드 (aapt → javac → d8 → zipalign → apksigner)
-tests/    엔진 단위 테스트(Node) + Playwright E2E + 무작위 조작 테스트
+tests/    엔진·AI 단위 테스트(Node) + 네이티브 JVM 테스트(모의 서버) + Playwright E2E + 무작위 조작 테스트
 docs/     계획·디자인 브리프·서드파티 고지
 .claude/skills/  개발에 쓴 디자인 스킬 10종(출처·라이선스 PROVENANCE 포함)
 ```
@@ -54,10 +55,13 @@ Android Studio 로 열려면 저장소 루트를 프로젝트로 열면 됩니�
 
 ## 테스트
 ```bash
-node web/tests/unit.mjs                 # 엔진 221개 검증
+node web/tests/unit.mjs                 # 엔진 247개 검증
+node web/tests/ai.unit.mjs              # AI 선택·요청 계획·OpenAI 요청/오류 98개 검증
+tests/jvm/run.sh                        # AiClient/KeyVault 를 모의 HTTP 서버로 검증
 node tests/e2e/smoke.cjs                # Playwright (헤드리스 크롬, 모바일 뷰포트)
 node tests/e2e/tools.cjs                # 모든 도구 순회 + 내보내기
 node tests/e2e/bridge.cjs               # 가짜 window.Android 로 네이티브 브리지 계약 검증
+node tests/e2e/ai.cjs                   # AI 수정 전 과정(가짜 AI 릴레이)
 node tests/e2e/monkey.cjs 1 150         # 무작위 조작(시드, 스텝)
 ```
 
@@ -67,6 +71,7 @@ node tests/e2e/monkey.cjs 1 150         # 무작위 조작(시드, 스텝)
 - 지우기는 패치 합성이 아닌 주변색 확산 + 질감 노이즈 방식이라 작은 물체에 가장 잘 맞습니다.
 - 매우 큰 사진(수십 MP)은 작업 해상도(설정에서 변경, 기본 자동)로 줄여 편집합니다.
 - 카메라 촬영은 Android 10 이상에서 지원합니다.
+- AI 수정: 생성 해상도가 최대 1536px 라 큰 영역은 덜 선명할 수 있고, OpenAI 조직 인증·API 결제가 필요할 수 있습니다. 이 개발 환경에서는 OpenAI 공식 문서/실제 키로 호출해 보지 못했습니다(모의 서버로만 검증).
 
 ## 라이선스 / 고지
 아이콘은 Lucide(ISC). 자세한 내용은 [`docs/THIRD_PARTY_NOTICES_2026-11-14.md`](docs/THIRD_PARTY_NOTICES_2026-11-14.md).
