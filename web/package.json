@@ -1,0 +1,15 @@
+{
+  "name": "imagefix-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "ImageFix 편집기 웹 UI (Android WebView 에 번들)",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node tests/unit.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "lucide-static": "^0.468.0"
+  }
+}

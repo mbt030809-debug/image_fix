@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 사진 프레임 -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFB224"
+        android:strokeWidth="4.5"
+        android:strokeLineJoin="round"
+        android:pathData="M38,40 h28 a6,6 0 0 1 6,6 v22 a6,6 0 0 1 -6,6 h-28 a6,6 0 0 1 -6,-6 v-22 a6,6 0 0 1 6,-6 z" />
+    <!-- 산 -->
+    <path
+        android:fillColor="#F2F0EA"
+        android:pathData="M35,70 L46,56 L53,65 L59,58 L69,70 z" />
+    <!-- 해 -->
+    <path
+        android:fillColor="#FFB224"
+        android:pathData="M60,46.5 m-3.5,0 a3.5,3.5 0 1 0 7,0 a3.5,3.5 0 1 0 -7,0" />
+    <!-- 반짝임 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M73,28 L74.8,32.2 L79,34 L74.8,35.8 L73,40 L71.2,35.8 L67,34 L71.2,32.2 z" />
+</vector>

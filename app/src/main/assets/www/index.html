@@ -1,0 +1,7 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>ImageFix</title>
+<style>body{margin:0;background:#0f1012;color:#eee;font:16px system-ui,"Noto Sans KR",sans-serif;padding:24px}</style></head>
+<body><h2>ImageFix 스모크 테스트</h2><pre id="o"></pre>
+<script>
+const o=document.getElementById('o');
+o.textContent=[ 'Android bridge: '+(typeof Android!=='undefined'), 'OffscreenCanvas: '+(typeof OffscreenCanvas), 'createImageBitmap: '+(typeof createImageBitmap), UA=navigator.userAgent ].join('\n');
+</script></body></html>
