@@ -1,0 +1,152 @@
+// 앱 셸: 홈 화면, 설정, 사진 열기, 테마, 뒤로가기
+import { h, icon, ensureSprite } from './ui/dom.js';
+import { t, initLang, setLang, getLang } from './i18n.js';
+import { Engine } from './engine/client.js';
+import { Editor } from './editor.js';
+import { bridge } from './bridge.js';
+import { toast, openModal, Segmented, Switch, Chips, Btn, Slider, handleBack, confirmDialog } from './ui/components.js';
+
+const SETTINGS_KEY = 'imagefix.settings';
+const VERSION = '1.0.0';
+
+async function decodeFile(file) {
+  const opts = { imageOrientation: 'from-image', premultiplyAlpha: 'none', colorSpaceConversion: 'default' };
+  try { return await createImageBitmap(file, opts); }
+  catch (e) {
+    const url = URL.createObjectURL(file);
+    try { const img = new Image(); img.src = url; await img.decode(); return await createImageBitmap(img); }
+    finally { URL.revokeObjectURL(url); }
+  }
+}
+
+export class App {
+  constructor(root) {
+    this.root = root;
+    this.settings = this.loadSettings();
+    initLang();
+    if (this.settings.lang) setLang(this.settings.lang);
+    ensureSprite();
+    this.applyTheme();
+    this.engine = new Engine();
+    this.screen = 'home';
+    this.homeEl = this.buildHome();
+    this.editor = new Editor(this);
+    this.editor.el.classList.add('screen');
+    this.editor.el.hidden = true;
+    root.append(this.homeEl, this.editor.el);
+    window.__onBack = () => this.onBack();
+    window.__onPause = () => {};
+    bridge.onImages((files) => this.openFiles(files));
+    window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (this.settings.theme === 'system') this.applyTheme(); });
+  }
+
+  loadSettings() {
+    const d = { theme: 'dark', maxSide: 'auto', reduceMotion: false, format: 'image/jpeg', quality: 92, showStats: false, grid: true, presets: [] };
+    try { return { ...d, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch (e) { return d; }
+  }
+  saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings)); } catch (e) { /* noop */ } }
+
+  applyTheme() {
+    let th = this.settings.theme;
+    if (th === 'system') th = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    document.documentElement.dataset.theme = th;
+    document.documentElement.dataset.reduceMotion = this.settings.reduceMotion ? '1' : '0';
+    try { localStorage.setItem('imagefix.reduceMotion', this.settings.reduceMotion ? '1' : '0'); } catch (e) { /* noop */ }
+    bridge.setBars(th === 'light' ? '#F6F6F6' : '#121212', th === 'light');
+    const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = th === 'light' ? '#f6f6f6' : '#121212';
+  }
+
+  // ------------------------------------------------------------ 홈
+  buildHome() {
+    const logo = h('div', { class: 'logo', 'aria-hidden': 'true' }, icon('aperture', 'lg'));
+    const settingsBtn = h('button', { class: 'iconbtn', type: 'button', 'aria-label': t('설정', 'Settings') }, icon('settings'));
+    settingsBtn.addEventListener('click', () => this.openSettings());
+    const pick = h('button', { class: 'btn filled block', type: 'button' }, icon('image'), t('사진 선택', 'Choose photo'));
+    pick.addEventListener('click', () => bridge.pickImages(false));
+    const tiles = [];
+    if (bridge.canCamera()) {
+      const cam = h('button', { class: 'tile', type: 'button' }, icon('camera', 'lg'), h('b', null, t('카메라', 'Camera')), h('span', null, t('바로 촬영해서 편집', 'Shoot and edit')));
+      cam.addEventListener('click', () => bridge.takePhoto()); tiles.push(cam);
+    }
+    const blank = h('button', { class: 'tile', type: 'button' }, icon('square-dashed', 'lg'), h('b', null, t('빈 캔버스', 'Blank canvas')), h('span', null, t('텍스트·스티커로 디자인', 'Design with text & stickers')));
+    blank.addEventListener('click', () => this.openBlankDialog()); tiles.push(blank);
+    const wrap = h('div', { class: 'wrap' },
+      h('header', null, h('div', { class: 'brand' }, logo, h('span', { translate: 'no' }, 'ImageFix')), settingsBtn),
+      h('section', { class: 'hero' }, h('h1', null, t('편집할 사진을 선택하세요', 'Choose a photo to edit')), h('p', null, t('자르기, 보정, 필터부터 텍스트·스티커·리터치까지. 모든 편집은 이 기기 안에서만 처리돼요.', 'Crop, adjust, filters, text, stickers and retouch. Everything is processed on this device.')), pick),
+      h('div', { class: 'tiles' }, ...tiles),
+      h('p', { class: 'foot' }, t('인터넷 권한 없이 동작해요 · 사진은 기기 밖으로 나가지 않아요', 'Works without internet permission · your photos never leave the device')));
+    const el = h('div', { class: 'screen home' }, wrap);
+    return el;
+  }
+
+  openBlankDialog() {
+    const presets = [['sq', '1:1', 1080, 1080], ['p45', '4:5', 1080, 1350], ['s916', '9:16', 1080, 1920], ['l169', '16:9', 1920, 1080], ['a4', 'A4', 1240, 1754], ['wide', '3:2', 1800, 1200]];
+    let sel = presets[0], color = '#ffffff';
+    const chips = Chips({ label: t('크기', 'Size'), items: presets.map((p) => ({ id: p[0], label: `${p[1]}  ${p[2]}×${p[3]}` })), value: 'sq', wrap: true, onSelect: (id) => { sel = presets.find((p) => p[0] === id); } });
+    const cols = ['#ffffff', '#000000', '#f5e6c8', '#ffd1dc', '#b8e0ff', '#1f2937', '#ff3b30', '#34c759'];
+    const sw = h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': t('배경색', 'Background') });
+    const bs = cols.map((c) => { const b = h('button', { class: 'swatch', type: 'button', role: 'radio', 'aria-checked': String(c === color), 'aria-label': c, style: { background: c } }); b.addEventListener('click', () => { color = c; bs.forEach((x, i) => x.setAttribute('aria-checked', String(cols[i] === c))); }); sw.append(b); return b; });
+    openModal({ title: t('빈 캔버스', 'Blank canvas'), build: (body, close) => {
+      body.append(h('div', { class: 'sheet-sec' }, t('크기', 'Size')), chips.el, h('div', { class: 'sheet-sec' }, t('배경색', 'Background')), sw,
+        h('div', { class: 'row', style: { justifyContent: 'flex-end', marginTop: '16px' } }, Btn(t('취소', 'Cancel'), 'text', close), Btn(t('만들기', 'Create'), 'filled', async () => {
+          close();
+          const [, , w, hh] = sel;
+          const cv = document.createElement('canvas'); cv.width = w; cv.height = hh;
+          const c = cv.getContext('2d'); c.fillStyle = color; c.fillRect(0, 0, w, hh);
+          const id = c.getImageData(0, 0, w, hh);
+          await this.editor.openBuffer(w, hh, id.data.buffer, 'canvas');
+          this.showEditor();
+        })));
+    } });
+  }
+
+  // ------------------------------------------------------------ 설정
+  openSettings() {
+    const s = this.settings;
+    openModal({ title: t('설정', 'Settings'), build: (body) => {
+      const lang = Segmented({ label: t('언어', 'Language'), items: [{ id: 'ko', label: '한국어' }, { id: 'en', label: 'English' }], value: getLang(), onChange: (v) => { setLang(v); s.lang = v; this.saveSettings(); toast(t('언어를 바꿨어요. 앱을 다시 열면 모두 적용돼요.', 'Language changed. Reopen the app to apply everywhere.')); } });
+      const theme = Segmented({ label: t('테마', 'Theme'), items: [{ id: 'dark', label: t('다크', 'Dark') }, { id: 'light', label: t('라이트', 'Light') }, { id: 'system', label: t('시스템', 'System') }], value: s.theme, onChange: (v) => { s.theme = v; this.saveSettings(); this.applyTheme(); } });
+      const res = Chips({ label: t('작업 해상도', 'Working resolution'), items: [{ id: 'auto', label: t('자동', 'Auto') }, { id: '2560', label: '2560' }, { id: '3072', label: '3072' }, { id: '4096', label: '4096' }, { id: '6000', label: '6000' }], value: String(s.maxSide), wrap: true, onSelect: (id) => { s.maxSide = id; this.saveSettings(); } });
+      const motion = Switch({ label: t('움직임 줄이기', 'Reduce motion'), value: s.reduceMotion, onChange: (v) => { s.reduceMotion = v; this.saveSettings(); this.applyTheme(); } });
+      const grid = Switch({ label: t('자르기 격자선', 'Crop grid'), value: s.grid !== false, onChange: (v) => { s.grid = v; this.saveSettings(); } });
+      const stats = Switch({ label: t('처리 정보 표시', 'Show processing info'), value: s.showStats, onChange: (v) => { s.showStats = v; this.saveSettings(); this.editor.stats.hidden = !v; } });
+      body.append(h('div', { class: 'sheet-sec' }, t('언어', 'Language')), lang.el, h('div', { class: 'sheet-sec' }, t('테마', 'Theme')), theme.el,
+        h('div', { class: 'sheet-sec' }, t('작업 해상도 (긴 변 px)', 'Working resolution (long side, px)')), res.el,
+        h('p', { class: 'sheet-note' }, t('높을수록 선명하지만 메모리를 더 써요. 보통은 자동을 권장해요.', 'Higher is sharper but uses more memory. Auto is recommended.')),
+        motion.el, grid.el, stats.el,
+        h('div', { class: 'sheet-sec' }, t('정보', 'About')),
+        h('div', { class: 'kv' }, h('span', null, t('버전', 'Version')), h('b', null, VERSION)),
+        h('p', { class: 'sheet-note' }, t('아이콘: Lucide (ISC License). 인터넷 권한이 없어 사진이 기기 밖으로 나가지 않아요.', 'Icons: Lucide (ISC License). The app has no internet permission, so photos never leave the device.')));
+    } });
+  }
+
+  // ------------------------------------------------------------ 화면 전환 / 열기
+  showEditor() { this.screen = 'editor'; this.homeEl.hidden = true; this.editor.el.hidden = false; this.editor.stats.hidden = !this.settings.showStats; requestAnimationFrame(() => this.editor.view.resize()); }
+  goHome() { this.screen = 'home'; this.editor.closeTool(false); this.editor.el.hidden = true; this.homeEl.hidden = false; }
+
+  async openFiles(files) {
+    if (!files || !files.length) return;
+    const f = files[0];
+    try {
+      this.showEditor();
+      this.editor.loadingEl.hidden = false;
+      const bmp = await decodeFile(f);
+      await this.editor.openBitmap(bmp, f.name);
+      if (files.length > 1) toast(t('첫 번째 사진을 열었어요', 'Opened the first photo'));
+    } catch (e) {
+      console.error(e);
+      this.goHome();
+      toast(t('사진을 열 수 없어요. 다른 사진을 선택해 보세요.', "Can't open this photo. Try another one."));
+    }
+  }
+
+  onBack() {
+    if (handleBack()) return true;
+    if (this.screen === 'editor') return this.editor.onBack();
+    if (this.exitArmed) return false;
+    this.exitArmed = true;
+    toast(t('한 번 더 누르면 종료돼요', 'Press back again to exit'), { duration: 2000 });
+    setTimeout(() => { this.exitArmed = false; }, 2000);
+    return true;
+  }
+}

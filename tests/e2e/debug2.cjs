@@ -1,0 +1,23 @@
+const path = require('path');
+const { launch, close, openPhoto, waitIdle } = require('./lib.cjs');
+const FIX = path.resolve(__dirname, '../fixtures');
+(async () => {
+  const h = await launch();
+  const { page } = h;
+  await openPhoto(page, path.join(FIX, 'landscape.jpg'));
+  await page.click('[data-tool=curves]'); await waitIdle(page, 500);
+  const b = await page.locator('.curve canvas').boundingBox();
+  console.log('curve box', JSON.stringify(b));
+  const cur = () => page.evaluate(() => JSON.stringify(window.imagefix.editor.doc().adj.curves));
+  await page.mouse.move(b.x + b.width * 0.5, b.y + b.height * 0.5);
+  await page.mouse.down();
+  console.log('after down', await cur());
+  await page.mouse.move(b.x + b.width * 0.5, b.y + b.height * 0.4, { steps: 3 });
+  console.log('after move', await cur());
+  await page.mouse.up();
+  console.log('after up  ', await cur());
+  await page.waitForTimeout(300);
+  console.log('later     ', await cur());
+  console.log('errors:', h.errors.join('\n') || 'none');
+  await close(h);
+})().catch((e) => { console.error(e); process.exit(1); });
