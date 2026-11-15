@@ -1,8 +1,8 @@
 # ImageFix — 이미지 편집 앱 (Android APK)
 
-사진 보정·필터·자르기부터 텍스트·스티커·리터치·콜라주까지 한 앱에서. 기본은 **오프라인**으로 동작하고, 인터넷 권한은 선택 기능인 **AI 기능**(AI 수정 · AI로 이미지 만들기 — Cloudflare · Pollinations · ModelScope, 선택한 영역/문구만 전송, **키 없이 쓰는 무료 옵션 있음**)에만 쓰입니다. 쓰지 않으면 사진은 기기 밖으로 나가지 않습니다.
+사진 보정·필터·자르기부터 텍스트·스티커·리터치·콜라주까지 한 앱에서. 기본은 **오프라인**으로 동작하고, 인터넷 권한은 선택 기능인 **AI 기능**(AI 수정 · AI로 이미지 만들기 — Cloudflare · ModelScope · Gemini · Hugging Face, 내 키/토큰으로 선택한 영역/문구만 전송)에만 쓰입니다. 쓰지 않으면 사진은 기기 밖으로 나가지 않습니다.
 
-- 빌드 날짜: 2026-11-15 · 버전 1.5.0 · Android 8.0(API 26) 이상, WebView 90+ (Play 스토어 자동 업데이트 기준 대부분 충족)
+- 빌드 날짜: 2026-11-15 · 버전 1.6.0 · Android 8.0(API 26) 이상, WebView 90+ (Play 스토어 자동 업데이트 기준 대부분 충족)
 - APK: [`release/ImageFix_2026-11-15.apk`](release/ImageFix_2026-11-15.apk)
 
 ![스크린샷](docs/screenshots_2026-11-15.jpg)
@@ -38,7 +38,7 @@
 | 곡선 | RGB/R/G/B 커브, 점 추가·이동·삭제, 숫자 입력·키보드 보정, 프리셋 |
 | 효과 | 블러(일반·모션·줌·틸트시프트·원형 초점), 모자이크·하프톤·유화·스케치·만화·엠보스·외곽선·포스터·솔라라이즈·듀오톤 등 아트, 글로우·소프트포커스·빛샘·빛망울·눈, 소용돌이·볼록/오목·물결·어안·거울·만화경, 글리치·색수차·RGB 분리·VHS (스택 방식) |
 | 리터치 | 치유, 복제, 지우기(주변 질감으로 채움), **픽셀 유동화**(밀기·확대·축소·비틀기 ↻↺·복원) |
-| AI 도구 · 영역 수정 | 올가미·브러시·사각형·원형으로 **영역 선택**(추가/빼기/반전/넓히기/부드럽게) → 그 영역(+주변)만 AI 에 요청 → **선택 안쪽에만** 합성되는 비파괴 레이어. **"문구로 채우기"**(사진 미전송)와 홈의 **"AI로 이미지 만들기"**도 있음. 제공자 3종: **Cloudflare Workers AI**(하루 무료 — 사진을 보고 고치는 FLUX.2 편집 · FLUX.1 schnell 생성 · 한국어→영어 번역) · **Pollinations.ai**(**키 없이** 무료, 문구 생성) · **ModelScope API-Inference**(무료 체험 토큰, Qwen-Image 등 문구 생성). 1.5.0 에서 OpenAI·OpenRouter 는 삭제했습니다. 키는 기기 Keystore 에 암호화 저장(Keystore 를 못 쓰는 기기는 앱 전용 저장소에 암호화 — 설정에 표시), 첫 요청 전 동의. 자세한 내용: [`docs/AI_EDIT_2026-11-14.md`](docs/AI_EDIT_2026-11-14.md) · 무료 모델 조사: [`docs/FREE_IMAGE_MODELS_2026-11-15.md`](docs/FREE_IMAGE_MODELS_2026-11-15.md) |
+| AI 도구 · 영역 수정 | 올가미·브러시·사각형·원형으로 **영역 선택**(추가/빼기/반전/넓히기/부드럽게) → 그 영역(+주변)만 AI 에 요청 → **선택 안쪽에만** 합성되는 비파괴 레이어. **"문구로 채우기"**(사진 미전송)와 홈의 **"AI로 이미지 만들기"**도 있음. 제공자 4종: **Cloudflare Workers AI**(하루 무료 — FLUX.2 편집 · FLUX.1 schnell 생성 · 한국어→영어 번역) · **ModelScope Qwen-Image-Edit**(무료 체험 토큰, 사진 편집) · **Google Gemini**(내 키, 편집·생성) · **Hugging Face FLUX.1 Fill**(진짜 마스크 인페인팅). OpenAI·OpenRouter·Pollinations 는 삭제했습니다. 키는 기기 Keystore 에 암호화 저장(Keystore 를 못 쓰는 기기는 앱 전용 저장소에 암호화 — 설정에 표시), 첫 요청 전 동의. 자세한 내용: [`docs/AI_EDIT_2026-11-14.md`](docs/AI_EDIT_2026-11-14.md) · 무료 모델 조사: [`docs/FREE_IMAGE_MODELS_2026-11-15.md`](docs/FREE_IMAGE_MODELS_2026-11-15.md) |
 | 브러시 | 브러시/선형/원형/색 범위 마스크 + 노출·대비·채도·색온도·선명·흐림·스무딩. 프리셋: 피부 매끄럽게·치아 미백·눈 밝게·적목 제거·컬러 스플래시 |
 | 텍스트 | 글꼴 13종(번들 한글 3종: 블랙한산스·주아·손글씨 펜 + 영문 5종), 색·그라데이션·외곽선·그림자·배경 상자·정렬·자간/줄 간격·혼합 모드 |
 | 스티커 | 이모지, 도형 24종, 내 사진 합성(워터마크·이중 노출) |
@@ -71,14 +71,14 @@ Android Studio 로 열려면 저장소 루트를 프로젝트로 열면 됩니�
 ## 테스트
 ```bash
 node web/tests/unit.mjs                 # 엔진 247개 검증
-node web/tests/ai.unit.mjs              # AI 선택·요청 계획·제공자 3종 요청/응답/오류(Pollinations 주소 인코딩·ModelScope 작업 흐름 포함)·번역·키 입력 정리 235개 검증
-tests/jvm/run.sh                        # AiClient(제공자 프로필·허용 경로·결과 주소 내려받기 검증, 142개) + KeyVault(키 보관 3단계·복구·옛 제공자 정리, 62개) 검증
+node web/tests/ai.unit.mjs              # AI 선택·요청 계획·제공자 4종 요청/응답/오류(Gemini·Hugging Face·ModelScope 작업 흐름 포함)·번역·키 입력 정리 242개 검증
+tests/jvm/run.sh                        # AiClient(제공자 프로필·허용 경로·결과 주소 내려받기 검증, 155개) + KeyVault(키 보관 3단계·복구·옛 제공자 정리, 64개) 검증
 node tests/e2e/smoke.cjs                # Playwright (헤드리스 크롬, 모바일 뷰포트)
 node tests/e2e/tools.cjs                # 모든 도구 순회 + 내보내기
 node tests/e2e/bridge.cjs               # 가짜 window.Android 로 네이티브 브리지 계약 검증
 node tests/e2e/ai.cjs                   # AI 수정 전 과정(Cloudflare 편집, 가짜 AI 릴레이)
-node tests/e2e/ai_free.cjs              # 키 없는/무료 제공자(Pollinations·ModelScope) 흐름 + 옛 설정 정리
-node tests/e2e/ai_gen.cjs               # 문구만으로 그리기(홈 이미지 만들기 3종·문구로 채우기)
+node tests/e2e/ai_providers.cjs         # Gemini·ModelScope 편집·Hugging Face 마스크 흐름 + 옛 설정 정리
+node tests/e2e/ai_gen.cjs               # 문구만으로 그리기(홈 이미지 만들기: Cloudflare·Gemini, 문구로 채우기)
 node tests/e2e/ai_key.cjs               # API 키 입력 흐름(오류 안내 표시·입력 정리·저장 실패/대체 저장소/점검)
 node web/tests/tools.unit.mjs           # 도구 분류(상위/하위) 무결성 + 여권 가이드 계산
 node tests/e2e/groups.cjs               # 상위/하위 목록 동작(세로·가로·태블릿·320px·영어)
@@ -93,7 +93,7 @@ node tests/e2e/monkey.cjs 1 150         # 무작위 조작(시드, 스텝)
 - 지우기는 패치 합성이 아닌 주변색 확산 + 질감 노이즈 방식이라 작은 물체에 가장 잘 맞습니다.
 - 매우 큰 사진(수십 MP)은 작업 해상도(설정에서 변경, 기본 자동)로 줄여 편집합니다.
 - 카메라 촬영은 Android 10 이상에서 지원합니다.
-- AI 기능: 생성 해상도가 1K 안팎(Pollinations 는 768 안팎)이라 큰 영역은 덜 선명할 수 있고, 무료 모델은 결과가 들쭉날쭉하며 한도가 있습니다(Pollinations 는 약 45초에 한 장 · 결과에 작은 로고, Cloudflare 는 하루 한도, ModelScope 는 무료 체험 한도). 무료 서비스는 보낸 내용이 제공사 정책에 따라 저장·개선에 쓰일 수 있습니다. **사진을 보고 고치는 편집은 Cloudflare 만** 되고 Pollinations·ModelScope 는 문구로 그리기 전용입니다. Gemini API 이미지 모델은 무료 티어가 없어 제외했습니다. 이 개발 환경에서는 각 제공자 공식 문서/실제 키로 호출해 보지 못했습니다(모의 서버로만 검증 — Pollinations 의 키 없는 주소와 ModelScope 의 헤더·응답 필드는 공개 예제 기준).
+- AI 기능: 생성 해상도가 1K 안팎이라 큰 영역은 덜 선명할 수 있고, 무료 모델은 결과가 들쭉날쭉하며 한도가 있습니다(Cloudflare 는 하루 한도, ModelScope 는 무료 체험 한도, **Gemini 이미지 모델은 무료 한도가 0 일 수 있음**, Hugging Face 는 계정 청구 가능). 무료 서비스는 보낸 내용이 제공사 정책에 따라 저장·개선에 쓰일 수 있습니다. Hugging Face FLUX.1 Fill 은 서버리스 제공 여부를 확인하지 못한 실험적 연동입니다. 이 개발 환경에서는 각 제공자 공식 문서/실제 키로 호출해 보지 못했습니다(모의 서버로만 검증 — 요청·응답 형식은 공개 예제·규약 기준).
 
 ## 라이선스 / 고지
 아이콘은 Lucide(ISC). 자세한 내용은 [`docs/THIRD_PARTY_NOTICES_2026-11-14.md`](docs/THIRD_PARTY_NOTICES_2026-11-14.md).
