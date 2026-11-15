@@ -30,7 +30,7 @@ const init = () => {
   const ROUTES = {
     cloudflare: [['POST', /^\/accounts\/\{account\}\/ai\/run\/@cf\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/, /^(application\/json|multipart\/form-data; boundary=)/], ['GET', /^\/accounts\/\{account\}\/ai\/models\/search$/, null]],
     gemini: [['POST', /^\/models\/[A-Za-z0-9][A-Za-z0-9._-]{0,60}:generateContent$/, /^application\/json$/], ['GET', /^\/models$/, null]],
-    fal: [['POST', /^\/fal-ai\/fal-ai\/flux-lora-fill$/, /^application\/json$/]],
+    fal: [['POST', /^\/fal-ai\/flux-lora-fill$/, /^application\/json$/]],
     modelscope: [['POST', /^\/images\/generations$/, /^application\/json$/], ['GET', /^\/tasks\/[A-Za-z0-9][A-Za-z0-9._-]{5,79}$/, null], ['GET', /^\/models$/, null]],
   };
   /** 결과 이미지 내려받기 주소 검사(네이티브 checkResultUrl 과 같은 규칙): https · 사용자 정보/포트/조각 없음 · 허용 도메인 */
