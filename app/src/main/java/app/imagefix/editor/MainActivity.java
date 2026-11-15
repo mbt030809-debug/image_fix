@@ -73,6 +73,7 @@ public class MainActivity extends Activity {
     static final int REQ_PICK = 1002;
     static final int REQ_CAMERA = 1003;
     static final int REQ_STORAGE = 1004;
+    static final int REQ_NOTIF = 1005;
     static final int BG = 0xFF0F1012;
     static final int MAX_PENDING = 40;
     static final int MAX_DECODE = 4096;
@@ -124,23 +125,31 @@ public class MainActivity extends Activity {
         if (collect(intent) > 0) notifyNative();
     }
 
+    /** 화면(앞)에 있나 / AI 작업이 진행 중인가(진행 중에는 WebView 를 멈추지 않아 백그라운드에서도 결과를 받는다) */
+    private volatile boolean resumed = true, aiBusy = false;
+    private boolean askedNotif = false;
+
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
         if (web != null) web.onResume();
+        AiService.clearDone(this);
     }
 
     @Override
     protected void onPause() {
+        resumed = false;
         if (web != null) {
             web.evaluateJavascript("window.__onPause&&window.__onPause()", null);
-            web.onPause();
+            if (!aiBusy) web.onPause(); // AI 작업 중에는 JS(상태 확인·결과 합성)가 계속 돌아야 한다
         }
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
+        AiService.stop(this);
         if (web != null) {
             root.removeView(web);
             web.destroy();
@@ -960,6 +969,38 @@ public class MainActivity extends Activity {
                         web.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP,
                                 android.view.HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING);
                     }
+                }
+            });
+        }
+
+        /** AI 작업 시작/끝: 포그라운드 서비스(진행 중 알림)로 앱을 백그라운드에 보내도 이어지게 한다. 끝나면 멈췄던 WebView 를 멈춘다 */
+        @JavascriptInterface
+        public void aiKeepAlive(final boolean on, final String text) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    aiBusy = on;
+                    if (on) {
+                        if (Build.VERSION.SDK_INT >= 33 && !askedNotif && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                            askedNotif = true;
+                            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIF);
+                        }
+                        AiService.start(MainActivity.this, text);
+                    } else {
+                        AiService.stop(MainActivity.this);
+                        if (!resumed && web != null) web.onPause();
+                    }
+                }
+            });
+        }
+
+        /** 작업이 끝났을 때 알림("결과가 준비됐어요") — 앱이 화면에 없을 때만 띄운다 */
+        @JavascriptInterface
+        public void aiNotify(final String title, final String text) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (!resumed) AiService.done(MainActivity.this, title, text);
                 }
             });
         }

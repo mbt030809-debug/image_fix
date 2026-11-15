@@ -25,6 +25,7 @@ const init = () => {
     msMode: 'ok', // ModelScope: ok | fail | noimage | notask | dlhtml
     msPolls: 0, // 성공하기 전에 "진행 중"으로 답하는 횟수 (JS 는 3초 + 4초 간격으로 확인하므로 0 이면 약 3초, 1 이면 약 7초)
     tasks: {}, downloads: [], msImages: {},
+    keep: [], notes: [], // aiKeepAlive(on, text) / aiNotify(title, text) 호출 기록 (백그라운드 계속 · 완료 알림)
   };
   const ROUTES = {
     cloudflare: [['POST', /^\/accounts\/\{account\}\/ai\/run\/@cf\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/, /^(application\/json|multipart\/form-data; boundary=)/], ['GET', /^\/accounts\/\{account\}\/ai\/models\/search$/, null]],
@@ -239,6 +240,8 @@ const init = () => {
     },
     aiClearKey: (provider) => { if (prov[provider]) { prov[provider].key = null; prov[provider].hint = ''; prov[provider].unreadable = false; if (provider === 'cloudflare') prov[provider].extra = ''; } },
     aiSelfTest: () => S.selfTest,
+    aiKeepAlive: (on, text) => { S.keep.push([!!on, text]); },
+    aiNotify: (title, text) => { S.notes.push([title, text]); },
     aiBegin: (spec) => {
       let s; try { s = JSON.parse(spec); } catch (e) { return 'ERR:spec'; }
       const rs = ROUTES[s.provider]; if (!rs) return 'ERR:provider';

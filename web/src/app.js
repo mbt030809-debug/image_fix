@@ -11,7 +11,7 @@ import { openAiSettings, aiConfig } from './tools/aisettings.js';
 import { openGenerate } from './tools/aigenerate.js';
 
 const SETTINGS_KEY = 'imagefix.settings';
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 
 async function decodeFile(file) {
   const opts = { imageOrientation: 'from-image', premultiplyAlpha: 'none', colorSpaceConversion: 'default' };

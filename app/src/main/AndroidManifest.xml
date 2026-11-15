@@ -7,9 +7,16 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
-    <!-- 인터넷은 AI 기능 요청(AiClient: 고정된 https 서버 api.cloudflare.com · image.pollinations.ai · api-inference.modelscope.cn,
+    <!-- 인터넷은 AI 기능 요청(AiClient: 고정된 https 서버 api.cloudflare.com · api-inference.modelscope.cn · generativelanguage.googleapis.com · router.huggingface.co,
          결과 이미지는 허용된 도메인에서만)에만 쓴다. WebView 의 웹 콘텐츠는 CSP + 외부 요청 403 으로 인터넷에 직접 접근할 수 없다. -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- AI 요청이 길어서(수십 초~수 분) 앱을 백그라운드로 보내도 이어지게: 진행 중 알림이 뜨는 포그라운드 서비스(dataSync) + 끝났을 때 알림(Android 13+ 알림 권한).
+         이 서비스는 통신을 하지 않고 프로세스만 살려 둔다. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="true" />
@@ -61,5 +68,10 @@
                 <data android:mimeType="image/*" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".AiService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

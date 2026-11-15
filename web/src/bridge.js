@@ -112,6 +112,10 @@ export const bridge = {
     clearKey(provider) { A.aiClearKey(provider); },
     /** 키 보관(암호화) 방식 점검 결과 "hw=ok sw=ok" (없으면 ''). 키 값은 쓰지 않는다 */
     selfTest() { try { return A && A.aiSelfTest ? String(A.aiSelfTest() || '') : ''; } catch (e) { return ''; } },
+    /** AI 작업이 진행되는 동안 true — 앱을 백그라운드로 보내도 이어지게 한다(네이티브: 포그라운드 서비스). 끝나면 false */
+    keepAlive(on, text) { try { if (A && A.aiKeepAlive) A.aiKeepAlive(!!on, String(text || '')); } catch (e) { /* noop */ } },
+    /** 끝났다는 알림(앱이 화면에 없을 때만 네이티브가 띄운다) */
+    notify(title, text) { try { if (A && A.aiNotify) A.aiNotify(String(title || ''), String(text || '')); } catch (e) { /* noop */ } },
     begin(spec) { const id = A.aiBegin(JSON.stringify(spec)); if (!id || String(id).startsWith('ERR:')) throw new Error(id || 'ERR:begin'); return String(id); },
     chunk(id, b64) { return !!A.aiChunk(id, b64); },
     send(id) { return !!A.aiSend(id); },

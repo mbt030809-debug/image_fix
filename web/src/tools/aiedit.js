@@ -364,6 +364,8 @@ export function open(ed, body) {
     job = { ctl, t0: performance.now(), phase: 'prepare', prep: null };
     S.phase = 'busy'; renderAll(); startTimer();
     bridge.keepScreenOn(true); // 기다리는 동안 화면이 꺼져 앱이 멈추지 않게
+    bridge.ai.keepAlive(true, t('AI 수정 결과를 기다리는 중이에요. 앱을 나가도 계속돼요.', 'Waiting for the AI edit. It keeps going if you leave the app.')); // 앱을 백그라운드로 보내도 이어지게(진행 중 알림)
+    let finished = '';
     let variants = [];
     try {
       const model = await resolveModel(ed.app, P.id);
@@ -391,6 +393,7 @@ export function open(ed, body) {
       variants = [];
       S.variant = 0; S.phase = 'review'; job = null; stopTimer();
       previewVariant(); renderAll();
+      finished = 'ok';
     } catch (e) {
       variants.forEach((v) => ed.dropAsset(v.key));
       job = null; stopTimer();
@@ -399,11 +402,14 @@ export function open(ed, body) {
       const info = e instanceof AiError ? e.info : { code: 'other', message: String((e && e.message) || e) };
       if (!(e instanceof AiError)) console.error(e);
       if (info.code === 'cancelled') S.msg = null;
-      else S.msg = explainError(info);
+      else { S.msg = explainError(info); finished = 'fail'; }
       renderAll();
       if (S.msg) toast(S.msg.text);
     } finally {
       bridge.keepScreenOn(false);
+      bridge.ai.keepAlive(false);
+      if (finished === 'ok') bridge.ai.notify('ImageFix', t('AI 수정 결과가 준비됐어요. 눌러서 확인하고 적용하세요.', 'Your AI edit is ready. Tap to review and apply it.'));
+      else if (finished === 'fail') bridge.ai.notify('ImageFix', t('AI 수정에 실패했어요. 눌러서 확인하세요.', 'The AI edit failed. Tap to see why.'));
     }
   }
 

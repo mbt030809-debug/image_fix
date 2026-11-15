@@ -51,6 +51,8 @@ export function openGenerate(app) {
     revoke(); st.blob = null; st.err = null; st.phase = 'busy'; st.t0 = performance.now(); st.step = 'wait';
     render(); timer = setInterval(tick, 400);
     bridge.keepScreenOn(true);
+    bridge.ai.keepAlive(true, t('AI 이미지를 만드는 중이에요. 앱을 나가도 계속돼요.', 'Creating the AI image. It keeps going if you leave the app.'));
+    let finished = '';
     try {
       const model = pid === 'cloudflare' ? P.generateModel : await resolveModel(app, pid);
       let prompt = text; st.translated = false;
@@ -63,14 +65,17 @@ export function openGenerate(app) {
       const size = P.sizes[Number(st.shape)] || P.sizes[0];
       const blobs = await P.generate({ model, prompt, size }, { signal: ctl.signal, onPhase: (p) => { st.step = p; } });
       if (!blobs.length) throw new AiError({ code: 'no_image', status: 200 });
-      st.blob = blobs[0]; st.url = URL.createObjectURL(st.blob); st.used = prompt; st.phase = 'done';
+      st.blob = blobs[0]; st.url = URL.createObjectURL(st.blob); st.used = prompt; st.phase = 'done'; finished = 'ok';
     } catch (e) {
       st.phase = 'form';
       const info = e instanceof AiError ? e.info : { code: 'other', message: String((e && e.message) || e) };
       if (!(e instanceof AiError)) console.error(e);
-      if (info.code !== 'cancelled') st.err = explainError(info);
+      if (info.code !== 'cancelled') { st.err = explainError(info); finished = 'fail'; }
     } finally {
       clearInterval(timer); timer = 0; ctl = null; bridge.keepScreenOn(false);
+      bridge.ai.keepAlive(false);
+      if (finished === 'ok') bridge.ai.notify('ImageFix', t('AI 이미지가 만들어졌어요. 눌러서 확인하세요.', 'Your AI image is ready. Tap to see it.'));
+      else if (finished === 'fail') bridge.ai.notify('ImageFix', t('AI 이미지 만들기에 실패했어요. 눌러서 확인하세요.', 'Creating the AI image failed. Tap to see why.'));
       if (modal) render();
     }
   }
