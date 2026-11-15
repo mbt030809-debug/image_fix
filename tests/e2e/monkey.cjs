@@ -16,19 +16,19 @@ const SKIP = /LUT|사진 추가|사진 교체|사진에서 색|스포이트|직�
   await openPhoto(page, path.join(FIX, fixture));
   const log = [];
   for (let i = 0; i < steps; i++) {
+    let desc = '';
     try {
       if (await page.locator('.scrim').count()) { await page.evaluate(() => window.__onBack && window.__onBack()); await page.waitForTimeout(80); }
       const r = rnd();
-      let desc = '';
       const stage = await page.locator('.screen:not([hidden]) .stage').first().boundingBox();
       if (r < 0.14) {
         // 하단 줄 = 상위 목록(분류): 분류를 누르고, 80% 는 하위 목록의 도구까지 누른다
         const gid = pick(await page.$$eval('.strip [data-group]', (els) => els.map((e) => e.dataset.group)));
         desc = 'tool group ' + gid;
-        await page.click('.strip [data-group=' + gid + ']', { timeout: 3000 });
+        await page.click('.strip [data-group=' + gid + ']', { timeout: 12000 }); // 필터 썸네일 등 무거운 작업 직후에는 메인 스레드가 잠깐 막힌다
         if (gid !== 'layers' && rnd() < 0.8) {
           const subs = await page.$$eval('.subrow:not([hidden]) [data-tool]', (els) => els.map((e) => e.dataset.tool));
-          if (subs.length) { const id = pick(subs); desc += ' > ' + id; await page.click('.subrow [data-tool=' + id + ']', { timeout: 3000 }); }
+          if (subs.length) { const id = pick(subs); desc += ' > ' + id; await page.click('.subrow [data-tool=' + id + ']', { timeout: 12000 }); }
         }
       } else if (r < 0.17) {
         // 패널 손잡이를 잡고 위/아래로 끌기(높이 조절)
@@ -82,7 +82,7 @@ const SKIP = /LUT|사진 추가|사진 교체|사진에서 색|스포이트|직�
       log.push(desc);
       await page.waitForTimeout(40);
       if (i % 10 === 9) await page.waitForFunction(() => !window.imagefix.editor.busy, null, { timeout: 40000 });
-    } catch (e) { log.push('ERR ' + String(e.message).split('\n')[0].slice(0, 80)); }
+    } catch (e) { log.push('ERR [' + desc + '] ' + String(e.message).split('\n')[0].slice(0, 80)); if (process.env.MONKEY_DEBUG) { console.log('--- ERR [' + desc + ']\n' + e.message.slice(0, 900)); console.log('    state:', JSON.stringify(await page.evaluate(() => { const ed = window.imagefix.editor, st = document.querySelector('.editor.ed .strip'); const b = st.getBoundingClientRect(); return { screen: window.imagefix.screen, scrim: document.querySelectorAll('.scrim').length, toolId: ed.toolId, group: ed.groupId, stripRect: [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)], vh: innerHeight, hiddenEd: ed.el.hidden, sheetSized: ed.sheetEl.className }; }).catch((x) => String(x)))); console.log('    frames:', JSON.stringify(await page.evaluate(() => new Promise((res) => { const out = []; let n = 0; const f = () => { const r = document.querySelector('.strip [data-group=tune]').getBoundingClientRect(); const e = document.querySelector('.editor.ed'); out.push([Math.round(r.left * 10) / 10, Math.round(r.top * 10) / 10, Math.round(r.width * 10) / 10, e.scrollTop, document.scrollingElement.scrollTop, document.querySelector('#app').scrollTop]); if (++n < 8) requestAnimationFrame(f); else res(out); }; requestAnimationFrame(f); })))); } }
   }
   await page.waitForFunction(() => !window.imagefix.editor.busy, null, { timeout: 60000 });
   console.log('seed ' + seed + ': steps=' + steps + ' tools=' + log.filter((l) => l.startsWith('tool')).length + ' drags=' + log.filter((l) => l.startsWith('sheet')).length + ' errors=' + h.errors.length);

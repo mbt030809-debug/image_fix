@@ -154,6 +154,12 @@ const check = (name, ok, extra = '') => { console.log((ok ? '  ✓ ' : '  ✗ ')
   await page.click('.strip [data-group=aitools]'); await page.waitForTimeout(150);
   await page.click('.subrow [data-action=aiset]'); await page.waitForTimeout(200);
   check('without the app (plain browser) the AI actions explain themselves', /앱\(APK\)에서만/.test(await page.locator('.snackbar').textContent()) && (await page.locator('.msheet').count()) === 0);
+  const T = await page.evaluate(() => { const r = (s) => document.querySelector(s).getBoundingClientRect(); const t = r('.snackbar'), s = r('.editor.ed .subrow'), b = r('.editor.ed .strip'); return { toastBottom: Math.round(t.bottom), subTop: Math.round(s.top), subBottom: Math.round(s.bottom), stripTop: Math.round(b.top) }; });
+  check('a toast floats above the open sub-list (it never covers the sub-list buttons)', T.toastBottom <= T.subTop + 1, JSON.stringify(T));
+  await page.click('.subrow [data-action=aiset]', { timeout: 3000 }); // 토스트가 떠 있어도 하위 버튼을 누를 수 있다
+  await page.click('.strip [data-group=aitools]'); await page.waitForTimeout(250);
+  const T2 = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--subrow-h').trim());
+  check('collapsing the sub-list lets the toast fall back to the bar (variable reset)', T2 === '0px', T2);
   await close(h);
 
   console.log(bad ? `\n✗ ${bad} check(s) failed` : '\n✓ groups all passed');

@@ -172,7 +172,7 @@ export class Editor {
       this.rememberSheet(); this.afterLayout();
     });
     // 편집기 크기(회전·키보드)가 바뀌면 기억한 비율로 다시 맞춘다
-    new ResizeObserver(() => { if (this.sheetEl.classList.contains('sized') && !this.el.classList.contains('sizing')) this.applySheetPref(); }).observe(this.el);
+    new ResizeObserver(() => { this.syncSubrowVar(); if (this.sheetEl.classList.contains('sized') && !this.el.classList.contains('sizing')) this.applySheetPref(); }).observe(this.el);
   }
 
   /** 시트 높이 한계: 접힘(손잡이+제목 줄) ~ 편집기 − 위/아래 막대 − 최소 사진 영역 */
@@ -252,7 +252,14 @@ export class Editor {
       this.subrow.hidden = true;
     }
     if (this.sheetEl.classList.contains('sized')) this.applySheetPref(); // 막대 높이가 바뀌면 한계도 바뀐다
+    this.syncSubrowVar();
     this.afterLayout();
+  }
+
+  /** 하위 목록(세로 폰 화면에서 하단 줄 바로 위) 높이를 CSS 변수로 알려, 알림(토스트)이 그 위에 뜨게 한다(하위 버튼을 가리지 않도록) */
+  syncSubrowVar() {
+    const hh = !this.subrow.hidden && !(this._rail && this._rail()) ? this.subrow.offsetHeight : 0;
+    document.documentElement.style.setProperty('--subrow-h', hh + 'px');
   }
 
   /** 도구/분류를 모두 닫는다(새 사진을 열거나 홈으로 갈 때) */
