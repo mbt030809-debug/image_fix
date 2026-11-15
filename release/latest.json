@@ -1,8 +1,8 @@
 {
-  "versionCode": 26111514,
-  "versionName": "1.8.0",
+  "versionCode": 26111515,
+  "versionName": "1.9.0",
   "apk": "release/ImageFix_2026-11-15.apk",
-  "sha256": "84af96591923a12a8df655ec457ae229f8218940ea9b7765e93f51ea91ac6c4e",
+  "sha256": "299a6f55639e12b925b84dc18a9a9ee3a62b23309a3f7989c82581a99e813238",
   "size": 3729886,
-  "notes": "- 앱 안에서 새 버전 알림·업데이트(시작할 때 확인, 설정에서 끌 수 있음)\n- AI 요청이 앱을 나가도 계속되고 끝나면 알림\n- fal.ai FLUX.1 Fill(진짜 마스크) · Gemini · ModelScope Qwen-Image-Edit 지원"
+  "notes": "- deAPI(deapi.ai) 이미지 편집 추가 — 설정에서 API 키 입력, 모델 이름은 직접 지정 가능\n- 앱 안 업데이트 · AI 요청 백그라운드 유지(이전 버전 기능 포함)"
 }
