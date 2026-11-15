@@ -125,7 +125,7 @@ const init = () => {
     if (S.mode === 'e401' && (route === '/models' || route.endsWith('/ai/models/search'))) return fail(j, 401, 'invalid_api_key', 'Invalid token');
     if (p === 'modelscope' && route === '/models') { await sleep(40); return finishJson(j, id, { object: 'list', data: [{ id: 'Qwen/Qwen-Image-Edit' }] }); }
     if (p === 'cloudflare' && route.endsWith('/ai/models/search')) { await sleep(30); return finishJson(j, id, { result: S.cfModels.map((name) => ({ name })), success: true, errors: [], messages: [] }); }
-    if (p === 'deapi' && route === '/models') { await sleep(30); return finishJson(j, id, { object: 'list', data: [{ id: 'qwen-image-edit' }, { id: 'flux-kontext-dev' }] }); }
+    if (p === 'deapi' && route === '/models') { await sleep(30); return finishJson(j, id, { object: 'list', data: [{ id: 'Flux_2_Klein_4B_BF16' }, { id: 'QwenImageEdit_Plus_NF4' }] }); }
     if (p === 'gemini' && route === '/models') { await sleep(30); return finishJson(j, id, { models: [{ name: 'models/gemini-2.5-flash-image' }, { name: 'models/gemini-2.5-pro' }, { name: 'models/gemini-3-pro-image-preview' }] }); }
 
     // ------------------------------------------------------------ deAPI: OpenAI 호환 /images/edits (multipart: model · prompt · image = 표시한 사진 1장)

@@ -245,7 +245,7 @@ export async function parseFalImage(json, relay, opts) {
 }
 
 // ------------------------------------------------------------ deAPI (OpenAI 호환 /images/edits)
-export const DEAPI_MODELS = ['qwen-image-edit', 'flux-kontext-dev'];
+export const DEAPI_MODELS = ['Flux_2_Klein_4B_BF16', 'QwenImageEdit_Plus_NF4'];
 export const DEAPI_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,60}$/;
 /** OpenAI 형식 이미지 응답 {data:[{b64_json|url}]} → 이미지 Blob (url 이면 허용된 도메인에서 내려받음). {error:{message}} 는 오류로 */
 export async function parseOpenAiImage(json, relay, opts, provider) {
@@ -394,7 +394,7 @@ export const PROVIDERS = {
     id: 'deapi', short: 'deAPI', free: false, noKey: false, genOnly: false, usesMask: false, oneImage: true, maxN: 1, hasQuality: false, sizes: SIZES_FREE,
     name: () => t('deAPI · 이미지 편집 (OpenAI 호환)', 'deAPI · image edit (OpenAI-compatible)'),
     tag: () => t('내 API 키', 'Your API key'),
-    desc: () => t('deapi.ai 의 이미지 편집(/v1/images/edits)으로 사진을 고쳐요. 편집할 곳을 마젠타로 표시한 사진 1장과 문구를 보내요(마스크는 지원하지 않아요). 모델 이름이 다르면 설정의 “직접 지정”에서 deAPI 가 제공하는 이름으로 바꿔 주세요. 요청 형식은 OpenAI 호환 규약 기준이라 서버가 거부하면 그 사유를 그대로 보여 줘요.', 'Edits photos with deapi.ai image editing (/v1/images/edits). Sends one photo with the edit area marked in magenta plus your prompt (masks are not supported). If the model name differs, set the name deAPI offers under Manual in settings. The request follows the OpenAI-compatible convention; if the server refuses it, its reason is shown as-is.'),
+    desc: () => t('deapi.ai 의 이미지 편집(/v1/images/edits)으로 사진을 고쳐요. 편집할 곳을 마젠타로 표시한 사진 1장과 문구를 보내요(마스크는 지원하지 않아요). 기본 모델은 Flux_2_Klein_4B_BF16 이고, “직접 지정”에서 QwenImageEdit_Plus_NF4 로 바꿀 수 있어요. 서버가 거부하면 그 사유를 그대로 보여 줘요.', 'Edits photos with deapi.ai image editing (/v1/images/edits). Sends one photo with the edit area marked in magenta plus your prompt (masks are not supported). If the model name differs, set the name deAPI offers under Manual in settings. The request follows the OpenAI-compatible convention; if the server refuses it, its reason is shown as-is.'),
     howto: () => t('deapi.ai 에 가입해 대시보드에서 API 키를 만들어 붙여 넣어요. 사용량만큼 deAPI 계정에 청구될 수 있어요.', 'Sign up at deapi.ai and create an API key in the dashboard. Usage may be billed to your deAPI account.'),
     host: () => 'oai.deapi.ai',
     privacy: (host) => t(`표시를 넣은 선택 영역과 주변 이미지 1장과 입력한 문구가 ${host}(deAPI)로 전송돼요. ${COMMON_PRIVACY()} 사용량은 계정에 청구될 수 있어요.`, `One image of the selected area with its surroundings (marked in magenta) and your prompt are sent to ${host} (deAPI). ${COMMON_PRIVACY()} Usage may be billed to your account.`),

@@ -204,12 +204,12 @@ export function openAiSettings(app, opts = {}) {
         const auto = { cloudflare: t('FLUX.2 klein 4B(가볍고 빠름, 무료 한도를 아껴 써요)를 써요.', 'Uses FLUX.2 klein 4B (light and fast; stretches the free allowance).'),
           modelscope: t('Qwen-Image-Edit 를 써요(사진 편집 모델).', 'Uses Qwen-Image-Edit (a photo-editing model).'),
           gemini: t('gemini-2.5-flash-image(“나노 바나나”)를 써요.', 'Uses gemini-2.5-flash-image ("Nano Banana").'),
-          deapi: t('qwen-image-edit 를 기본으로 써요(deAPI 의 실제 모델 이름과 다르면 “직접 지정”에서 바꿔 주세요).', 'Uses qwen-image-edit by default (if deAPI names it differently, change it under Manual).') }[pid];
+          deapi: t('Flux_2_Klein_4B_BF16 를 기본으로 써요(QwenImageEdit_Plus_NF4 는 “직접 지정”에서 입력해요).', 'Uses Flux_2_Klein_4B_BF16 by default (QwenImageEdit_Plus_NF4 can be set under Manual).') }[pid];
         body.append(h('p', { class: 'sheet-note' }, auto + ' ' + t('현재: ', 'Current: ') + P.autoModel));
       } else {
         const ids = Array.from(new Set([...(P.modelPresets || []), ...(pc.models || [])]));
         body.append(Chips({ label: t('사용 가능한 모델', 'Available models'), wrap: true, value: pc.custom, items: ids.map((m) => ({ id: m, label: m, valueText: isCfGenerateModel(m) ? t('생성 전용', 'text-only') : undefined })), onSelect: (id) => { pc.custom = id; pc.model = id; customInput.value = id; app.saveSettings(); } }).el);
-        customInput.placeholder = { modelscope: 'Qwen/Qwen-Image-Edit', gemini: 'gemini-2.5-flash-image', deapi: 'qwen-image-edit' }[pid] || '@cf/black-forest-labs/flux-2-klein-4b';
+        customInput.placeholder = { modelscope: 'Qwen/Qwen-Image-Edit', gemini: 'gemini-2.5-flash-image', deapi: 'Flux_2_Klein_4B_BF16' }[pid] || '@cf/black-forest-labs/flux-2-klein-4b';
         customInput.value = pc.custom || '';
         customInput.onchange = () => { const v = customInput.value.trim().slice(0, 100); pc.custom = v; pc.model = v || MODEL_AUTO; app.saveSettings(); };
         body.append(customInput);
