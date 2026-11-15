@@ -10,6 +10,7 @@ const FIX = path.resolve(__dirname, '../fixtures');
   let bad = 0;
   const check = (name, ok, extra = '') => { console.log((ok ? '  ✓ ' : '  ✗ ') + name + (extra ? ' ' + extra : '')); if (!ok) bad++; };
   await page.waitForFunction(() => window.imagefix && window.imagefix.editor.base && !window.imagefix.editor.busy, null, { timeout: 30000 });
+  await page.evaluate(() => sessionStorage.setItem('t_upd', 'available')); // 가짜 네이티브: 새 버전이 있는 상태로 시작
   await page.reload();
   await page.waitForSelector('.home .tile', { timeout: 15000 });
   h.errors.length = 0;
@@ -67,6 +68,17 @@ const FIX = path.resolve(__dirname, '../fixtures');
   await page.waitForFunction(() => window.__ai.upd.state === 'error', null, { timeout: 15000 });
   await page.waitForTimeout(900);
   check('a failed download (hash mismatch) is reported and nothing is installed', /내려받지 못했어요/.test(await snack()) && !(await calls()).includes('install'), await calls());
+
+  // ---------------------------------------------------------------- 3b) 다른 창이 열려 있으면 가리지 않는다
+  console.log('▶ 열린 창을 가리지 않기');
+  await closeModal();
+  await page.evaluate(() => { const st = window.imagefix.settings; delete st.updateCheckedAt; st.autoUpdate = true; window.imagefix.saveSettings(); sessionStorage.setItem('t_upd', 'available'); });
+  await page.reload(); await page.waitForSelector('.home .tile', { timeout: 15000 });
+  await page.click('.home .tile >> text=AI로 이미지 만들기'); await page.waitForTimeout(300);
+  await page.waitForTimeout(6500);
+  check('a new version found while another sheet is open does not pop up over it', (await page.locator('.dialog').count()) === 0 && (await page.locator('.msheet h2 >> text=AI로 이미지 만들기').count()) === 1);
+  await page.locator('.msheet [aria-label="닫기"]').last().click(); await page.waitForTimeout(250);
+  await openSettings();
 
   // ---------------------------------------------------------------- 4) 자동 확인 끄기
   console.log('▶ 자동 확인 끄기');

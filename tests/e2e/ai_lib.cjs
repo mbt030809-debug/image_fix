@@ -26,7 +26,7 @@ const init = () => {
     msPolls: 0, // 성공하기 전에 "진행 중"으로 답하는 횟수 (JS 는 3초 + 4초 간격으로 확인하므로 0 이면 약 3초, 1 이면 약 7초)
     tasks: {}, downloads: [], msImages: {},
     // 앱 업데이트 가짜 네이티브: mode = available | none | checkfail | dlfail | needperm
-    upd: { mode: 'available', state: 'idle', err: '', done: 0, allowed: false, calls: [], info: { versionName: '9.9.9', versionCode: 99999999, notes: '테스트 새 버전\n- 개선 1\n- 개선 2', size: 3700000 } },
+    upd: { mode: (() => { try { return sessionStorage.getItem('t_upd') || 'none'; } catch (e) { return 'none'; } })(), state: 'idle', err: '', done: 0, allowed: false, calls: [], info: { versionName: '9.9.9', versionCode: 99999999, notes: '테스트 새 버전\n- 개선 1\n- 개선 2', size: 3700000 } },
     keep: [], notes: [], // aiKeepAlive(on, text) / aiNotify(title, text) 호출 기록 (백그라운드 계속 · 완료 알림)
   };
   const ROUTES = {

@@ -86,6 +86,7 @@ export async function autoCheck(app) {
     if (app.settings.updateCheckedAt && now - app.settings.updateCheckedAt < DAY12) return;
     const st = await checkStatus();
     if (st.state === 'none' || st.state === 'available') { app.settings.updateCheckedAt = now; app.saveSettings(); }
-    if (st.state === 'available' && app.screen === 'home') await offerUpdate(st);
+    // 홈 화면이고 다른 창(설정·AI 시트·대화상자)이 열려 있지 않을 때만 안내한다(사용 중인 화면을 가리지 않게)
+    if (st.state === 'available' && app.screen === 'home' && !document.querySelector('.msheet, .scrim, .dialog')) await offerUpdate(st);
   } catch (e) { /* 조용히 넘어간다 */ }
 }
