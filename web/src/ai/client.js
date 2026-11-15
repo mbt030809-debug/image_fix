@@ -11,7 +11,7 @@ export class AiError extends Error {
 }
 
 /**
- * provider: 'cloudflare' | 'modelscope' | 'gemini' | 'huggingface'
+ * provider: 'cloudflare' | 'modelscope' | 'gemini' | 'fal'
  * req: {method, path, contentType?, body?: Blob}  또는 결과 이미지 내려받기 {method:'GET', url} (허용된 도메인만 — 네이티브가 검사)
  * opts: {signal?: AbortSignal, onPhase?: (phase)=>void, timeoutMs?: number}
  * 반환 {id, status} (state==='done'). 결과를 다 쓴 뒤 bridge.ai.release(id) 는 호출자 책임.

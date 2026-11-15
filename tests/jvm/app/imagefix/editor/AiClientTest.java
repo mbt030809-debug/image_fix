@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * AiClient JVM 테스트 (모의 HTTP 서버). 실행: tests/jvm/run.sh
  * 실기기와 같은 코드(AiClient)를 그대로 쓰고, https 제한만 insecureForTests 로 풀어 localhost 로 보낸다.
- * 제공자: cloudflare(키+계정 ID, JSON/multipart) · modelscope(편집: 비동기 작업 + 결과 내려받기) · gemini(generateContent) · huggingface(FLUX.1 Fill, fal 경유)
+ * 제공자: cloudflare(키+계정 ID, JSON/multipart) · modelscope(편집: 비동기 작업 + 결과 내려받기) · gemini(generateContent) · fal(FLUX.1 Fill, fal 경유)
  */
 public class AiClientTest {
     static int pass = 0, fail = 0;
@@ -153,7 +153,7 @@ public class AiClientTest {
                         reply(x, 200, "{\"models\":[{\"name\":\"models/gemini-2.5-flash-image\"},{\"name\":\"models/gemini-2.5-pro\"}]}");
                     } else if (p.startsWith("/gm400/models/")) {
                         reply(x, 400, "{\"error\":{\"code\":400,\"message\":\"API key not valid. Please pass a valid API key.\",\"status\":\"INVALID_ARGUMENT\"}}");
-                    } else if (p.equals("/hf/fal-ai/fal-ai/flux-lora-fill")) {
+                    } else if (p.equals("/hf/fal-ai/flux-lora-fill")) {
                         rec("hf", x, body);
                         reply(x, 200, "{\"images\":[{\"url\":\"data:image/png;base64,QUJD\",\"content_type\":\"image/png\"}]}");
                     } else if (p.startsWith("/hf403/")) {
@@ -203,10 +203,10 @@ public class AiClientTest {
 
         // ---------------------------------------------------------------- 제공자/키 규칙
         System.out.println("▶ providers");
-        ok(AiClient.knownProvider("cloudflare") && AiClient.knownProvider("modelscope") && AiClient.knownProvider("gemini") && AiClient.knownProvider("huggingface"), "four providers");
+        ok(AiClient.knownProvider("cloudflare") && AiClient.knownProvider("modelscope") && AiClient.knownProvider("gemini") && AiClient.knownProvider("fal"), "four providers");
         ok(!AiClient.knownProvider("pollinations"), "Pollinations is gone");
         ok(!AiClient.knownProvider("openai") && !AiClient.knownProvider("openrouter") && !AiClient.knownProvider(null) && !AiClient.knownProvider(""), "OpenAI/OpenRouter are gone");
-        ok(AiClient.needsKey("cloudflare") && AiClient.needsKey("modelscope") && AiClient.needsKey("gemini") && AiClient.needsKey("huggingface") && !AiClient.needsKey("pollinations") && !AiClient.needsKey("openai"), "every provider needs a key");
+        ok(AiClient.needsKey("cloudflare") && AiClient.needsKey("modelscope") && AiClient.needsKey("gemini") && AiClient.needsKey("fal") && !AiClient.needsKey("pollinations") && !AiClient.needsKey("openai"), "every provider needs a key");
         ok(AiClient.validAccount(ACC) && !AiClient.validAccount("ABCDEF0123456789abcdef0123456789") && !AiClient.validAccount("short") && !AiClient.validAccount(null), "account id validation");
 
         // ---------------------------------------------------------------- begin 검증 (cloudflare)
@@ -341,24 +341,24 @@ public class AiClientTest {
         expectErrorWith(new AiClient(new Cfg().with("gemini", root + "/gm400", "bad", null)), "gemini", "/models/gemini-2.5-flash-image:generateContent", 400, "400", "API key not valid");
         expectErrorWith(new AiClient(new Cfg().with("gemini", root + "/gm", null, null)), "gemini", "/models/gemini-2.5-flash-image:generateContent", 401, "no_key", "");
 
-        // ---------------------------------------------------------------- Hugging Face (fal 경유 FLUX.1 Fill)
-        System.out.println("▶ Hugging Face: FLUX.1 Fill via fal");
-        AiClient ch = new AiClient(new Cfg().with("huggingface", root + "/hf", "hf_test_token_6666", null));
-        for (String bad : new String[]{"/fal-ai/fal-ai/flux-lora", "/fal-ai/fal-ai/flux-lora-fill/x", "/hf-inference/models/x", "/../fal-ai/fal-ai/flux-lora-fill", "/models"})
-            ok("ERR:path".equals(ch.begin("{\"provider\":\"huggingface\",\"method\":\"POST\",\"path\":\"" + bad + "\",\"type\":\"application/json\",\"len\":2}")), "huggingface: rejects " + bad);
-        ok("ERR:path".equals(ch.begin("{\"provider\":\"huggingface\",\"method\":\"GET\",\"path\":\"/fal-ai/fal-ai/flux-lora-fill\"}")), "huggingface: POST only");
-        ok("ERR:type".equals(ch.begin("{\"provider\":\"huggingface\",\"method\":\"POST\",\"path\":\"/fal-ai/fal-ai/flux-lora-fill\",\"type\":\"" + MP + "\",\"len\":3}")), "huggingface: JSON only");
+        // ---------------------------------------------------------------- fal.ai (fal.run 직접, FLUX.1 Fill)
+        System.out.println("▶ fal.ai: FLUX.1 Fill (Authorization: Key …)");
+        AiClient ch = new AiClient(new Cfg().with("fal", root + "/hf", "hf_test_token_6666", null));
+        for (String bad : new String[]{"/fal-ai/fal-ai/flux-lora", "/fal-ai/flux-lora-fill/x", "/hf-inference/models/x", "/../fal-ai/flux-lora-fill", "/models"})
+            ok("ERR:path".equals(ch.begin("{\"provider\":\"fal\",\"method\":\"POST\",\"path\":\"" + bad + "\",\"type\":\"application/json\",\"len\":2}")), "fal: rejects " + bad);
+        ok("ERR:path".equals(ch.begin("{\"provider\":\"fal\",\"method\":\"GET\",\"path\":\"/fal-ai/flux-lora-fill\"}")), "fal: POST only");
+        ok("ERR:type".equals(ch.begin("{\"provider\":\"fal\",\"method\":\"POST\",\"path\":\"/fal-ai/flux-lora-fill\",\"type\":\"" + MP + "\",\"len\":3}")), "fal: JSON only");
         byte[] hbody = "{\"prompt\":\"x\",\"image_url\":\"data:image/png;base64,AA==\",\"mask_url\":\"data:image/png;base64,AA==\",\"sync_mode\":true}".getBytes(UTF8);
-        String hfid = ch.begin("{\"provider\":\"huggingface\",\"method\":\"POST\",\"path\":\"/fal-ai/fal-ai/flux-lora-fill\",\"type\":\"application/json\",\"len\":" + hbody.length + "}");
-        ok(hfid.startsWith("a"), "huggingface begin ok");
+        String hfid = ch.begin("{\"provider\":\"fal\",\"method\":\"POST\",\"path\":\"/fal-ai/flux-lora-fill\",\"type\":\"application/json\",\"len\":" + hbody.length + "}");
+        ok(hfid.startsWith("a"), "fal begin ok");
         ch.chunk(hfid, Base64.getEncoder().encodeToString(hbody));
         ch.send(hfid);
         JSONObject hfst = waitDone(ch, hfid, 6000);
-        ok("done".equals(hfst.optString("state")) && new String(ch.result(hfid, 0), UTF8).contains("data:image/png"), "huggingface JSON result kept raw: " + hfst);
+        ok("done".equals(hfst.optString("state")) && new String(ch.result(hfid, 0), UTF8).contains("data:image/png"), "fal JSON result kept raw: " + hfst);
         Headers hh = H.get("hf");
-        ok(hh != null && "Bearer hf_test_token_6666".equals(hh.getFirst("Authorization")) && Arrays.equals(B.get("hf"), hbody), "bearer token + body intact");
+        ok(hh != null && "Key hf_test_token_6666".equals(hh.getFirst("Authorization")) && Arrays.equals(B.get("hf"), hbody), "Key authorization + body intact");
         ch.release(hfid);
-        expectErrorWith(new AiClient(new Cfg().with("huggingface", root + "/hf403", "hf_x", null)), "huggingface", "/fal-ai/fal-ai/flux-lora-fill", 403, "http_403", "gated");
+        expectErrorWith(new AiClient(new Cfg().with("fal", root + "/hf403", "hf_x", null)), "fal", "/fal-ai/flux-lora-fill", 403, "http_403", "gated");
 
         // ---------------------------------------------------------------- ModelScope (비동기 작업 + 결과 내려받기)
         System.out.println("▶ ModelScope: submit → poll → download");
@@ -450,7 +450,7 @@ public class AiClientTest {
                 "https://x.aliyuncs.com:8443/x.png", "https://u:p@x.aliyuncs.com/x.png", "https://x.aliyuncs.com/x.png#frag", "https://x.aliyuncs.com/a b.png", "https://x.aliyuncs.com/x.png?" + new String(new char[1000]).replace('\0', 'a'),
                 "https://127.0.0.1/x.png", "https://localhost/x.png", "ftp://x.aliyuncs.com/x.png", "javascript:alert(1)", "", "https://", "//x.aliyuncs.com/x.png", "https://x.aliyuncs.com/%0d%0a<x>.png", "https://x.aliyuncs.com"})
             ok(AiClient.checkResultUrl(ms, bad) == null, "rejects " + (bad.isEmpty() ? "(empty)" : bad.substring(0, Math.min(40, bad.length()))));
-        ok(AiClient.checkResultUrl(AiClient.PROFILES.get("cloudflare"), "https://x.aliyuncs.com/x.png") == null && AiClient.checkResultUrl(AiClient.PROFILES.get("gemini"), "https://x.aliyuncs.com/x.png") == null && AiClient.checkResultUrl(AiClient.PROFILES.get("huggingface"), "https://x.aliyuncs.com/x.png") == null && AiClient.checkResultUrl(AiClient.PROFILES.get("huggingface"), "https://v3.fal.media/files/a/x.png?x=1") != null && AiClient.checkResultUrl(AiClient.PROFILES.get("huggingface"), "https://fal.media.evil.com/x.png") == null && AiClient.checkResultUrl(null, "https://x.aliyuncs.com/x.png") == null, "only modelscope (aliyuncs/modelscope) and huggingface (fal) may download result images, each from its own hosts");
+        ok(AiClient.checkResultUrl(AiClient.PROFILES.get("cloudflare"), "https://x.aliyuncs.com/x.png") == null && AiClient.checkResultUrl(AiClient.PROFILES.get("gemini"), "https://x.aliyuncs.com/x.png") == null && AiClient.checkResultUrl(AiClient.PROFILES.get("fal"), "https://x.aliyuncs.com/x.png") == null && AiClient.checkResultUrl(AiClient.PROFILES.get("fal"), "https://v3.fal.media/files/a/x.png?x=1") != null && AiClient.checkResultUrl(AiClient.PROFILES.get("fal"), "https://fal.media.evil.com/x.png") == null && AiClient.checkResultUrl(null, "https://x.aliyuncs.com/x.png") == null, "only modelscope (aliyuncs/modelscope) and fal (fal) may download result images, each from its own hosts");
         AiClient.insecureForTests = true;
 
         srv.stop(0);

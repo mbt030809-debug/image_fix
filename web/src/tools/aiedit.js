@@ -1,5 +1,5 @@
 // AI 영역 수정: 올가미/브러시/사각형/원형으로 영역을 고르고, 그 영역(+주변)만 AI 에 요청한다.
-//  - Cloudflare · Gemini: 사진을 보고 고친다(편집) 또는 문구만으로 채운다  - ModelScope(Qwen-Image-Edit): 표시한 사진 1장으로 편집  - Hugging Face(FLUX.1 Fill): 진짜 마스크로 인페인팅
+//  - Cloudflare · Gemini: 사진을 보고 고친다(편집) 또는 문구만으로 채운다  - ModelScope(Qwen-Image-Edit): 표시한 사진 1장으로 편집  - fal.ai(FLUX.1 Fill): 진짜 마스크로 인페인팅
 // 결과는 "선택 안쪽만 보이는" 이미지 레이어로 합성돼 비파괴(숨기기·삭제·실행 취소)로 남는다.
 import { h, icon, rafThrottle } from '../ui/dom.js';
 import { t } from '../i18n.js';
@@ -234,7 +234,7 @@ export function open(ed, body) {
     promptEl.addEventListener('input', () => { S.prompt = promptEl.value; });
     const P = prov();
     const M = modelProfile(P.id, currentModel(P), pcfg(cfg, P.id));
-    const list = (M.mode === 'generate' || P.id === 'huggingface') ? GEN_PRESETS : PRESETS; // FLUX Fill 은 "채울 내용"을 설명한다
+    const list = (M.mode === 'generate' || P.id === 'fal') ? GEN_PRESETS : PRESETS; // FLUX Fill 은 "채울 내용"을 설명한다
     const presets = Chips({ label: t('예시 문구', 'Examples'), items: list.map((p) => ({ id: p.id, label: t(p.ko, p.en) })), onSelect: (id) => { const p = list.find((x) => x.id === id); S.prompt = t(p.pko, p.pen); promptEl.value = S.prompt; promptEl.focus(); } });
     const ctx = Segmented({ label: t('주변 포함', 'Context'), items: [{ id: '0', label: t('좁게', 'Tight') }, { id: '1', label: t('보통', 'Normal') }, { id: '2', label: t('넓게', 'Wide') }], value: String(cfg.ctx), onChange: (v) => { cfg.ctx = +v; save(); } });
     const openSet = (pid) => openAiSettings(ed.app, { provider: pid, onClose: renderBody });
@@ -249,7 +249,7 @@ export function open(ed, body) {
         onChange: (v) => { const pc = pcfg(cfg, P.id); if (P.id === 'cloudflare') { if (v === 'generate') { pc.model = P.generateModel; pc.custom = P.generateModel; } else { pc.model = MODEL_AUTO; } } else pc.mode = v; save(); renderBody(); } }).el);
       if (M.mode === 'generate') body.append(note(t(`이 방식은 사진을 보지 않고 문구만으로 그려요. 선택 안쪽에 들어갈 내용을 설명해 주세요(예: 맑은 하늘, 잔디밭). ${P.id === 'cloudflare' ? '한국어는 영어로 번역해서 보내요. ' : ''}사진은 전송되지 않아요.`, `This mode never sees your photo: it paints from the prompt alone. Describe what should appear inside the selection (e.g. clear sky, grass). ${P.id === 'cloudflare' ? 'Korean is translated to English first. ' : ''}No photo is sent.`)));
     }
-    if (P.id === 'huggingface') body.append(note(t('FLUX.1 Fill 은 선택(마스크) 안쪽만 새로 그리는 모델이에요. “무엇으로 채울지”를 영어로 적어 주세요(예: a clear blue sky). “셔츠를 파랗게” 같은 고치기 지시는 잘 안 맞아요. 비상업 라이선스 모델이에요.', 'FLUX.1 Fill repaints only inside the selection (mask). Say what should fill it, in English (e.g. a clear blue sky). Edit instructions like "make the shirt blue" fit it poorly. Non-commercial license.')));
+    if (P.id === 'fal') body.append(note(t('FLUX.1 Fill 은 선택(마스크) 안쪽만 새로 그리는 모델이에요. “무엇으로 채울지”를 영어로 적어 주세요(예: a clear blue sky). “셔츠를 파랗게” 같은 고치기 지시는 잘 안 맞아요. 비상업 라이선스 모델이에요.', 'FLUX.1 Fill repaints only inside the selection (mask). Say what should fill it, in English (e.g. a clear blue sky). Edit instructions like "make the shirt blue" fit it poorly. Non-commercial license.')));
     if (P.id === 'modelscope') body.append(note(t('편집할 곳을 마젠타로 표시한 사진 1장과 문구를 보내요(Qwen-Image-Edit). 요청 형식은 공개 예제 기준이라 서버가 거부하면 그 사유가 그대로 보여요.', 'Sends one photo with the edit area marked in magenta plus your prompt (Qwen-Image-Edit). The format follows public examples; if the server refuses it, its reason is shown as-is.')));
     body.append(promptEl, presets.el);
     body.append(sec(t('주변 포함 (넓을수록 어울리게 만들지만 결과가 덜 선명할 수 있어요)', 'Context (wider blends better but may look softer)')), ctx.el,

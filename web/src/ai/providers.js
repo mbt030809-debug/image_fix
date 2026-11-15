@@ -2,7 +2,7 @@
 //  cloudflare  : POST /accounts/{account}/ai/run/@cf/… — Workers AI. FLUX.2 사진 편집(마스크 없음 → "표시 이미지") + FLUX.1 schnell 문구 생성 + 번역. 하루 무료 한도.
 //  modelscope  : POST /images/generations(비동기) → GET /tasks/{id} 폴링 → 결과 주소 내려받기 — Qwen-Image-Edit 사진 편집(표시한 사진 1장 + 문구). 무료 체험 토큰.
 //  gemini      : POST /models/<모델>:generateContent — 사진 편집(원본 + 표시 이미지) 또는 문구 생성. 사용자의 Gemini API 키.
-//  huggingface : POST /fal-ai/fal-ai/flux-lora-fill (HF Inference Providers, fal 경유) — FLUX.1 Fill [dev] 마스크 인페인팅(진짜 마스크). HF 토큰.
+//  fal         : POST fal.run/fal-ai/flux-lora-fill (fal.ai 직접, 동기) — FLUX.1 Fill [dev] 마스크 인페인팅(진짜 마스크). fal API 키.
 // 어느 경우든 결과는 "선택 안쪽에만" 합성하므로, 모델이 다른 곳을 바꿔도 사진 나머지는 그대로다.
 import { t } from '../i18n.js';
 import { buildMultipart } from './common.js';
@@ -39,7 +39,7 @@ export async function ensureImageBlob(blob) {
 
 // ------------------------------------------------------------ 크기 클래스
 const withAr = (list) => list.map((s) => ({ ...s, ar: s.w / s.h, str: `${s.w}x${s.h}` }));
-/** 1024 안팎 (Gemini · Hugging Face FLUX.1 Fill · ModelScope Qwen-Image-Edit, Cloudflare 생성 모델) */
+/** 1024 안팎 (Gemini · fal.ai FLUX.1 Fill · ModelScope Qwen-Image-Edit, Cloudflare 생성 모델) */
 export const SIZES_FREE = withAr([{ w: 1024, h: 1024 }, { w: 1152, h: 768 }, { w: 768, h: 1152 }]);
 /** Cloudflare FLUX.2: 입력 이미지는 "512×512 미만"(문서) → 480 이하로 보내고, 출력은 2배(width/height 로 지정, 16의 배수) */
 export const SIZES_CF = withAr([{ w: 480, h: 480, out: { w: 960, h: 960 } }, { w: 480, h: 320, out: { w: 960, h: 640 } }, { w: 320, h: 480, out: { w: 640, h: 960 } }]);
@@ -231,8 +231,8 @@ export function parseGeminiModels(json) {
   return arr.map((m) => String((m && m.name) || '').replace(/^models\//, '')).filter((n) => GM_MODEL_RE.test(n) && /image/i.test(n));
 }
 
-// ------------------------------------------------------------ Hugging Face · FLUX.1 Fill [dev] (fal 경유)
-export const HF_MODEL = 'black-forest-labs/FLUX.1-Fill-dev';
+// ------------------------------------------------------------ fal.ai · FLUX.1 Fill [dev] (fal.run 직접 호출)
+export const FAL_MODEL = 'fal-ai/flux-lora-fill';
 /** fal 응답 {images:[{url}]} 또는 {image:{url}} → 이미지 Blob (data URI 이거나 fal 주소) */
 export async function parseFalImage(json, relay, opts) {
   const first = json && ((Array.isArray(json.images) && json.images[0]) || json.image);
@@ -240,7 +240,7 @@ export async function parseFalImage(json, relay, opts) {
   if (typeof u !== 'string' || !u) throw new AiError({ code: 'no_image', status: 200, message: '' });
   if (u.startsWith('data:')) { const b = dataUrlToBlob(u); if (!b) throw new AiError({ code: 'no_image', status: 200, message: '' }); return ensureImageBlob(b); }
   if (opts && opts.onPhase) opts.onPhase('download');
-  const { blob } = await relay('huggingface', { method: 'GET', url: u }, opts);
+  const { blob } = await relay('fal', { method: 'GET', url: u }, opts);
   return ensureImageBlob(blob);
 }
 
@@ -353,22 +353,22 @@ export const PROVIDERS = {
     privacyText: (host) => t(`입력한 문구가 ${host} 로 전송돼요. 사진은 보내지 않아요. 무료 사용 시 Google 이 보낸 내용을 제품 개선에 쓸 수 있어요.`, `Your prompt is sent to ${host}. No photo is sent. On the free tier Google may use submitted content to improve its products.`),
   },
 
-  huggingface: {
-    id: 'huggingface', short: 'Hugging Face', free: false, noKey: false, genOnly: false, usesMask: true, maskKind: 'white', maxN: 1, hasQuality: false, sizes: SIZES_FREE,
-    name: () => t('Hugging Face · FLUX.1 Fill [dev] (마스크 인페인팅)', 'Hugging Face · FLUX.1 Fill [dev] (mask inpainting)'),
+  fal: {
+    id: 'fal', short: 'fal.ai', free: false, noKey: false, genOnly: false, usesMask: true, maskKind: 'white', maxN: 1, hasQuality: false, sizes: SIZES_FREE,
+    name: () => t('fal.ai · FLUX.1 Fill [dev] (마스크 인페인팅)', 'fal.ai · FLUX.1 Fill [dev] (mask inpainting)'),
     tag: () => t('진짜 마스크', 'Real mask'),
-    desc: () => t('FLUX.1 Fill [dev] 는 선택 영역(마스크) 안쪽만 새로 그리는 인페인팅 전용 모델이에요. 선택 안쪽에 들어갈 “내용”을 영어로 설명하면 가장 잘 돼요(예: a clear blue sky). Hugging Face Inference Providers(fal 경유)로 호출해요 — 무료 한도·제공 여부는 확인하지 못했어요. 비상업 라이선스 모델이에요.', 'FLUX.1 Fill [dev] is an inpainting-only model that repaints just inside your selection (the mask). Describe what should appear there, in English (e.g. a clear blue sky). Called through Hugging Face Inference Providers (via fal) — free allowance and availability are unverified. Non-commercial license.'),
-    howto: () => t('huggingface.co 에서 토큰(hf_…, Inference Providers 호출 권한)을 만들고, FLUX.1-Fill-dev 모델 페이지에서 약관에 동의(Access repository)해 둬야 해요. 사용량은 Hugging Face 계정에 청구될 수 있어요.', 'Create a token (hf_…, with permission to call Inference Providers) at huggingface.co and accept the terms on the FLUX.1-Fill-dev model page (Access repository). Usage may be billed to your Hugging Face account.'),
-    host: () => 'router.huggingface.co',
-    privacy: (host) => t(`선택 영역과 주변 이미지, 마스크, 입력한 문구가 ${host}(Hugging Face → fal.ai)로 전송돼요. ${COMMON_PRIVACY()} 사용량은 계정에 청구될 수 있어요. 결과 이미지는 fal 주소에서 받을 수 있어요.`, `The selected area with its surroundings, the mask and your prompt are sent to ${host} (Hugging Face → fal.ai). ${COMMON_PRIVACY()} Usage may be billed to your account. The result may be downloaded from a fal address.`),
-    extra: null, modelPresets: [], fallbackModel: HF_MODEL, autoModel: HF_MODEL,
+    desc: () => t('FLUX.1 Fill [dev] 는 선택 영역(마스크) 안쪽만 새로 그리는 인페인팅 전용 모델이에요. 선택 안쪽에 들어갈 “내용”을 영어로 설명하면 가장 잘 돼요(예: a clear blue sky). fal.ai 의 API(fal-ai/flux-lora-fill)를 직접 불러요 — 사용량만큼 fal 계정에 청구돼요(가입 시 체험 크레딧이 있을 수 있어요). 비상업 라이선스 모델이에요.', 'FLUX.1 Fill [dev] is an inpainting-only model that repaints just inside your selection (the mask). Describe what should appear there, in English (e.g. a clear blue sky). Calls the fal.ai API (fal-ai/flux-lora-fill) directly — usage is billed to your fal account (new accounts may get trial credit). Non-commercial license.'),
+    howto: () => t('fal.ai 에 가입하고 대시보드의 Keys 에서 API Key 를 만들어 붙여 넣어요(형식: 아이디:비밀값).', 'Sign up at fal.ai, create an API key under Keys in the dashboard and paste it (format: id:secret).'),
+    host: () => 'fal.run',
+    privacy: (host) => t(`선택 영역과 주변 이미지, 마스크, 입력한 문구가 ${host}(fal.ai)로 전송돼요. ${COMMON_PRIVACY()} 사용량은 fal 계정에 청구돼요. 결과 이미지는 fal 주소에서 받을 수 있어요.`, `The selected area with its surroundings, the mask and your prompt are sent to ${host} (fal.ai). ${COMMON_PRIVACY()} Usage is billed to your fal account. The result may be downloaded from a fal address.`),
+    extra: null, modelPresets: [], fallbackModel: FAL_MODEL, autoModel: FAL_MODEL,
     /** 원본 크롭 + 마스크(흰색 = 채울 곳) + 문구 → fal flux-lora-fill 본문 (결과는 data URI 로 받는다) */
     async buildEdit(o, imgs) {
       const payload = { prompt: String(o.prompt || '').trim().slice(0, 1500), image_url: await toDataUrl(imgs.image), mask_url: await toDataUrl(imgs.mask), sync_mode: true, output_format: 'png', num_inference_steps: 28, guidance_scale: 30 };
-      return { method: 'POST', path: '/fal-ai/fal-ai/flux-lora-fill', contentType: 'application/json', body: new Blob([JSON.stringify(payload)], { type: 'application/json' }) };
+      return { method: 'POST', path: '/fal-ai/flux-lora-fill', contentType: 'application/json', body: new Blob([JSON.stringify(payload)], { type: 'application/json' }) };
     },
     async edit(req, opts, relay = relayRaw) {
-      const { blob } = await relay('huggingface', req, opts);
+      const { blob } = await relay('fal', req, opts);
       return [await parseFalImage(await parseJsonBlob(blob), relay, opts)];
     },
     privacyText: (host) => t(`입력한 문구가 ${host} 로 전송돼요.`, `Your prompt is sent to ${host}.`),

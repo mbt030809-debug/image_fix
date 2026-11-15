@@ -31,7 +31,7 @@ import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * AI 제공자별 API 키/부가 값 보관소 (cloudflare: 토큰 + 계정 ID, modelscope: 토큰, gemini: API 키, huggingface: 토큰).
+ * AI 제공자별 API 키/부가 값 보관소 (cloudflare: 토큰 + 계정 ID, modelscope: 토큰, gemini: API 키, fal: 토큰).
  * 키는 AES-256-GCM 으로 암호화해 SharedPreferences 에 저장하고, 웹(JS) 쪽에는 마지막 4자리 힌트만 돌려준다.
  *
  * 암호화 방식(Tier)은 세 가지다. 키를 저장할 때 위에서부터 차례로 시도한다.
@@ -48,7 +48,7 @@ final class KeyVault implements AiClient.Config {
     private static final String PREFS = "imagefix_ai";
     private static final Charset UTF8 = Charset.forName("UTF-8");
     private static final Pattern KEY_OK = Pattern.compile("^[\\x21-\\x7e]{8,400}$");
-    static final String[] PROVIDERS = {"cloudflare", "modelscope", "gemini", "huggingface"};
+    static final String[] PROVIDERS = {"cloudflare", "modelscope", "gemini", "fal"};
 
     /** 문자열 저장소 (실기기: SharedPreferences, 테스트: 메모리) */
     interface Store {
@@ -93,6 +93,8 @@ final class KeyVault implements AiClient.Config {
                 names.add(n); // 1.1~1.4: OpenAI 는 접두사 없는 이름을 썼다
                 names.add("openrouter." + n);
                 names.add("openai." + n);
+                names.add("huggingface." + n); // 1.6.x: Hugging Face 연동(라우터에 경로가 없어 동작하지 않아 fal.ai 직접 연동으로 교체)
+                names.add("pollinations." + n);
             }
             boolean any = false;
             for (String n : names) if (store.get(n) != null) {
@@ -113,7 +115,7 @@ final class KeyVault implements AiClient.Config {
 
     static String defaultBase(String provider) {
         if ("gemini".equals(provider)) return "https://generativelanguage.googleapis.com/v1beta";
-        if ("huggingface".equals(provider)) return "https://router.huggingface.co";
+        if ("fal".equals(provider)) return "https://fal.run";
         if ("modelscope".equals(provider)) return "https://api-inference.modelscope.cn/v1";
         return "https://api.cloudflare.com/client/v4";
     }

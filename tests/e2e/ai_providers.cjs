@@ -1,5 +1,5 @@
 // 제공자별 E2E (영역 수정 도구): Gemini(편집 / 문구로 채우기 / 모델 지정 / 오류) · ModelScope Qwen-Image-Edit(작업 만들기 → 확인 → 내려받기, 표시한 사진 1장) ·
-// Hugging Face FLUX.1 Fill(진짜 흰색 마스크, data URI / fal 주소 결과, 약관 미동의 오류) · 제공자 전환 · 옛 설정(OpenAI/OpenRouter/Pollinations) 정리.
+// fal.ai FLUX.1 Fill(진짜 흰색 마스크, data URI / fal 주소 결과, 권한 오류) · 제공자 전환 · 옛 설정(OpenAI/OpenRouter/Pollinations) 정리.
 const path = require('path');
 const { launch, close, waitIdle, selTool } = require('./lib.cjs');
 const { init, installRoute, helpers } = require('./ai_lib.cjs');
@@ -47,7 +47,7 @@ let HH = null;
   console.log('▶ Gemini (사진 편집 · 문구로 채우기)');
   check('with nothing set up the card offers only "key setup" (no keyless provider any more)', (await page.locator('.ai-setup .btn').count()) === 1 && (await page.locator('.ai-setup .btn >> text=키 설정').count()) === 1);
   await openSettingsOn('gemini');
-  check('settings list the four providers with their tags', (await page.locator('.msheet .chip[data-id]').evaluateAll((els) => els.map((e) => e.dataset.id))).join() === 'cloudflare,modelscope,gemini,huggingface' && /하루 무료/.test(await chip('cloudflare').textContent()) && /Qwen/.test(await chip('modelscope').textContent()) && /내 API 키/.test(await chip('gemini').textContent()) && /진짜 마스크/.test(await chip('huggingface').textContent()));
+  check('settings list the four providers with their tags', (await page.locator('.msheet .chip[data-id]').evaluateAll((els) => els.map((e) => e.dataset.id))).join() === 'cloudflare,modelscope,gemini,fal' && /하루 무료/.test(await chip('cloudflare').textContent()) && /Qwen/.test(await chip('modelscope').textContent()) && /내 API 키/.test(await chip('gemini').textContent()) && /진짜 마스크/.test(await chip('fal').textContent()));
   check('Gemini tab: API key only (no account ID), model selection, connection test', (await page.locator('.msheet input[name=imagefix-ai-account]').count()) === 0 && (await page.locator('.msheet input[type=password]').getAttribute('placeholder')) === 'Gemini API 키 (AIza…)' && /gemini-2\.5-flash-image/.test(await page.locator('.msheet').last().textContent()) && (await page.locator('.msheet .btn >> text=연결 테스트').count()) === 1);
   await saveToken('AIzaSyTestKey-abcdef123456');
   check('key saved natively in its own slot', (await page.locator('.msheet .kv b').textContent()).includes('3456') && JSON.stringify(await page.evaluate(() => window.__ai.setKeyCalls.at(-1))) === JSON.stringify(['gemini', 'key', '']));
@@ -165,30 +165,30 @@ let HH = null;
   check('cancel while waiting for the task: no further status checks, no error shown', (await logOf()).filter((l) => l.kind === 'poll').length === p0 && (await page.locator('.ai-msg.err').count()) === 0);
   check('no layer was added by the failed / cancelled runs', (await layers()).length === 1);
 
-  // ---------------------------------------------------------------- 3) Hugging Face · FLUX.1 Fill
-  console.log('▶ Hugging Face · FLUX.1 Fill (진짜 마스크)');
-  await openSettingsOn('huggingface');
-  check('Hugging Face tab: token only, no model list, no connection test, how-to mentions accepting the model terms', (await page.locator('.msheet input[type=password]').getAttribute('placeholder')) === 'Hugging Face 토큰 (hf_…)' && (await page.locator('.msheet .btn >> text=연결 테스트').count()) === 0 && (await page.locator('.msheet .seg button >> text=직접 지정').count()) === 0 && /Access repository/.test(await page.locator('.msheet').last().textContent()));
-  await saveToken('hf_testtoken1234567890');
-  check('token saved natively', (await page.locator('.msheet .kv b').textContent()).includes('7890') && JSON.stringify(await page.evaluate(() => window.__ai.setKeyCalls.at(-1))) === JSON.stringify(['huggingface', 'key', '']));
-  await h.shot('p5_settings_huggingface');
+  // ---------------------------------------------------------------- 3) fal.ai · FLUX.1 Fill
+  console.log('▶ fal.ai · FLUX.1 Fill (진짜 마스크)');
+  await openSettingsOn('fal');
+  check('fal.ai tab: key only, no model list, no connection test, how-to points to the Keys page', (await page.locator('.msheet input[type=password]').getAttribute('placeholder')) === 'fal.ai API 키 (아이디:비밀값)' && (await page.locator('.msheet .btn >> text=연결 테스트').count()) === 0 && (await page.locator('.msheet .seg button >> text=직접 지정').count()) === 0 && /Keys/.test(await page.locator('.msheet').last().textContent()));
+  await saveToken('fal-1a2b3c4d:secretvalue1234567890');
+  check('token saved natively', (await page.locator('.msheet .kv b').textContent()).includes('7890') && JSON.stringify(await page.evaluate(() => window.__ai.setKeyCalls.at(-1))) === JSON.stringify(['fal', 'key', '']));
+  await h.shot('p5_settings_fal');
   await closeModal();
   check('the ask tab explains the fill-style prompts; content examples are shown', (await page.locator('.sheet .sheet-note >> text=FLUX.1 Fill').count()) >= 1 && (await page.locator('.sheet .chip >> text=맑은 하늘').count()) === 1 && (await page.locator('.seg button >> text=문구로 채우기').count()) === 0);
   await run();
-  await consent(['router.huggingface.co', 'fal', '마스크']);
+  await consent(['fal.run', 'fal', '마스크']);
   await waitPhase('busy', 5000);
   await waitPhase('review', 40000); await page.waitForTimeout(250);
-  let hf = await last('edit', 'huggingface');
-  check('POST /fal-ai/fal-ai/flux-lora-fill: the prompt as typed (not wrapped), image + mask as data URLs, synchronous', hf && hf.path === '/fal-ai/fal-ai/flux-lora-fill' && hf.type === 'application/json' && hf.prompt === 'a clear blue sky with soft fluffy clouds' && hf.sync === true && ['prompt', 'image_url', 'mask_url', 'sync_mode'].every((k) => hf.keys.includes(k)), JSON.stringify(hf && hf.keys));
+  let hf = await last('edit', 'fal');
+  check('POST /fal-ai/flux-lora-fill: the prompt as typed (not wrapped), image + mask as data URLs, synchronous', hf && hf.path === '/fal-ai/flux-lora-fill' && hf.type === 'application/json' && hf.prompt === 'a clear blue sky with soft fluffy clouds' && hf.sync === true && ['prompt', 'image_url', 'mask_url', 'sync_mode'].every((k) => hf.keys.includes(k)), JSON.stringify(hf && hf.keys));
   const hr = hf ? hf.transparent / (hf.imgW * hf.imgH) : 0;
   check('the mask has the same size as the image and a white fill area inside it', hf && hf.maskW === hf.imgW && hf.maskH === hf.imgH && hr > 0.04 && hr < 0.7 && hf.bbox[0] > 0 && hf.bbox[2] < hf.imgW, JSON.stringify(hf && [hr.toFixed(3), hf.bbox]));
   const hm = await px(0.51, 0.49);
   check('result blended inside the selection', near(hm, GOAL, 12), JSON.stringify(hm));
   check('pixels far outside the selection are untouched', near(await px(0.1, 0.1), before.corner, 0));
-  await h.shot('p6_review_huggingface');
+  await h.shot('p6_review_fal');
   await page.click('.sheet-head .btn >> text=적용'); await page.waitForTimeout(300);
   L = await layers();
-  check('applied as a locked AI layer tagged huggingface', L.length === 2 && L[1].ai.provider === 'huggingface' && L[1].ai.mode === 'edit' && L[1].lock, JSON.stringify(L[1] && L[1].ai));
+  check('applied as a locked AI layer tagged fal', L.length === 2 && L[1].ai.provider === 'fal' && L[1].ai.mode === 'edit' && L[1].lock, JSON.stringify(L[1] && L[1].ai));
   await lasso(); await askTab();
   await page.evaluate(() => { window.__ai.hfMode = 'url'; });
   const dl0 = (await logOf()).filter((l) => l.kind === 'download').length;
@@ -198,7 +198,7 @@ let HH = null;
   await discard();
   await page.evaluate(() => { window.__ai.hfMode = 'gated'; });
   await runToSelect();
-  check('gated model (403) → asks to accept the model terms, with a settings shortcut', /Access repository/.test(await errText()) && (await page.locator('.sheet .btn >> text=AI 설정 열기').count()) === 1);
+  check('403 → permission message with a settings shortcut', /권한/.test(await errText()) && (await page.locator('.sheet .btn >> text=AI 설정 열기').count()) === 1);
   await page.evaluate(() => { window.__ai.hfMode = 'ok'; });
 
   // ---------------------------------------------------------------- 4) 전환 · 설정 유지
@@ -211,7 +211,7 @@ let HH = null;
   check('removing the key clears only this provider and its consents', (await page.locator('.msheet .kv b').textContent()).includes('없음') && (await page.evaluate(() => !window.__ai.prov.gemini.key && !!window.__ai.prov.modelscope.key && !('gemini' in window.imagefix.settings.ai.consents) && !('gemini:text' in window.imagefix.settings.ai.consents))));
   await closeModal();
   const st = await page.evaluate(() => JSON.parse(localStorage.getItem('imagefix.settings')).ai);
-  check('settings persist the provider, per-provider state and consents (never a key)', st.provider === 'gemini' && st.consents.modelscope === 'api-inference.modelscope.cn' && st.consents.huggingface === 'router.huggingface.co' && !JSON.stringify(st).includes('AIzaSy') && !JSON.stringify(st).includes('hf_testtoken') && !JSON.stringify(st).includes('ms-1a2b3c4d'), JSON.stringify(st.consents));
+  check('settings persist the provider, per-provider state and consents (never a key)', st.provider === 'gemini' && st.consents.modelscope === 'api-inference.modelscope.cn' && st.consents.fal === 'fal.run' && !JSON.stringify(st).includes('AIzaSy') && !JSON.stringify(st).includes('secretvalue') && !JSON.stringify(st).includes('ms-1a2b3c4d'), JSON.stringify(st.consents));
 
   // ---------------------------------------------------------------- 5) 옛 설정 정리
   console.log('▶ 옛 설정 정리');

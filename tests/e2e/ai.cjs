@@ -52,7 +52,7 @@ let HH = null;
   await h.shot('a2_ask');
   await page.click('.sheet-head .btn >> text=AI로 수정'); await page.waitForTimeout(200);
   check('running without key opens AI settings', (await page.locator('.msheet').count()) === 1 && (await page.locator('.msheet h2').first().textContent()) === 'AI 설정');
-  check('settings offer exactly Cloudflare / ModelScope / Gemini / Hugging Face (OpenAI, OpenRouter, Pollinations are gone)', (await page.locator('.msheet .chip[data-id]').evaluateAll((els) => els.map((e) => e.dataset.id))).join() === 'cloudflare,modelscope,gemini,huggingface');
+  check('settings offer exactly Cloudflare / ModelScope / Gemini / fal.ai (OpenAI, OpenRouter, Pollinations are gone)', (await page.locator('.msheet .chip[data-id]').evaluateAll((els) => els.map((e) => e.dataset.id))).join() === 'cloudflare,modelscope,gemini,fal');
   await page.fill('.msheet input[name=imagefix-ai-account]', ACC);
   await page.fill('.msheet input[type=password]', 'cf-token-abcdef123456');
   await page.click('.msheet .btn >> text=키 저장'); await page.waitForTimeout(150);
@@ -193,7 +193,7 @@ let HH = null;
   await page.click('.home [aria-label="설정"]'); await page.waitForTimeout(200);
   check('app settings has an AI settings button (native)', (await page.locator('.msheet .btn >> text=AI 설정').count()) === 1);
   const note = await page.locator('.msheet').last().textContent();
-  check('app settings note lists the four providers', /Cloudflare/.test(note) && /ModelScope/.test(note) && /Gemini/.test(note) && /Hugging Face/.test(note) && !/OpenAI|OpenRouter|Pollinations/.test(note));
+  check('app settings note lists the four providers', /Cloudflare/.test(note) && /ModelScope/.test(note) && /Gemini/.test(note) && /fal\.ai/.test(note) && !/OpenAI|OpenRouter|Pollinations/.test(note));
   await page.click('.msheet .btn >> text=AI 설정'); await page.waitForTimeout(200);
   check('AI settings reachable from app settings', (await page.locator('.msheet h2 >> text=AI 설정').count()) >= 1);
 

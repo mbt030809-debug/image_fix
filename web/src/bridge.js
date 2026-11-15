@@ -105,7 +105,7 @@ export const bridge = {
    */
   ai: {
     available() { return !!(A && A.aiInfo); },
-    /** {v:3, providers:{cloudflare:{hasKey,hint,extra,readable,prot}, modelscope:{…}, gemini:{…}, huggingface:{…}}} (키 자체는 없음) */
+    /** {v:3, providers:{cloudflare:{hasKey,hint,extra,readable,prot}, modelscope:{…}, gemini:{…}, fal:{…}}} (키 자체는 없음) */
     info() { try { return A && A.aiInfo ? JSON.parse(A.aiInfo()) : null; } catch (e) { return null; } },
     /** key 가 빈 문자열이면 키는 유지하고 부가 값(cloudflare 계정 ID)만 바꾼다. 성공 true, 실패 시 사유 문자열("ERR:badkey" · "ERR:badextra" · "ERR:store:<원인>" …) */
     setKey(provider, key, extra) { const r = A.aiSetKey(provider, key || '', extra || ''); return r === 'OK' ? true : String(r || 'ERR:unknown'); },

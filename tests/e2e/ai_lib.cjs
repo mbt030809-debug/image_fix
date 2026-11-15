@@ -4,7 +4,7 @@
 //  - cloudflare  : 표시 이미지 편집(FLUX.2, multipart) / 문구 생성(FLUX.1 schnell) / 번역(m2m100) / 모델 목록
 //  - modelscope  : Qwen-Image-Edit — POST /images/generations(image 데이터 주소 + tt 헤더) → task_id → GET /tasks/{id} (msPolls 번 "진행 중") → 결과 URL → 내려받기(https, 허용 도메인만)
 //  - gemini      : POST /models/<m>:generateContent — 3 parts(문구+원본+표시)=편집, 1 part=문구 생성, GET /models 목록 (gmMode: text | blocked)
-//  - huggingface : POST /fal-ai/fal-ai/flux-lora-fill — 흰색 마스크 안쪽만 채운 결과를 data URI(또는 hfMode='url' 이면 fal 주소) 로
+//  - fal : POST /fal-ai/flux-lora-fill — 흰색 마스크 안쪽만 채운 결과를 data URI(또는 hfMode='url' 이면 fal 주소) 로
 // 편집 모델은 업로드된 이미지를 실제로 읽어서(표시 이미지와 원본의 차이) 선택 영역만 색칠한 결과를 돌려준다.
 const path = require('path');
 const { OUT, DATE } = require('./lib.cjs');
@@ -16,12 +16,12 @@ const init = () => {
   try { started = sessionStorage.getItem('t_started'); sessionStorage.setItem('t_started', '1'); } catch (e) { /* noop */ }
   let pending = started ? 0 : 1;
   const mkProv = () => ({ key: null, hint: '', extra: '', prot: 'hw', unreadable: false });
-  const prov = { cloudflare: mkProv(), modelscope: mkProv(), gemini: mkProv(), huggingface: mkProv() };
+  const prov = { cloudflare: mkProv(), modelscope: mkProv(), gemini: mkProv(), fal: mkProv() };
   const S = window.__ai = {
     log: [], specs: [], mode: 'ok', tr: 'ok', jobs: {}, results: {}, delay: 600, setKeyCalls: [], cfBinary: false, keyMode: 'ok', selfTest: 'hw=ok sw=ok', prov,
     cfModels: ['@cf/black-forest-labs/flux-2-klein-4b', '@cf/black-forest-labs/flux-2-dev', '@cf/meta/llama-3.1-8b-instruct'],
     gmMode: 'ok', // Gemini: ok | text | blocked
-    hfMode: 'ok', // Hugging Face: ok | url(fal 주소로 답함) | gated(403)
+    hfMode: 'ok', // fal.ai: ok | url(fal 주소로 답함) | gated(403 권한 없음)
     msMode: 'ok', // ModelScope: ok | fail | noimage | notask | dlhtml
     msPolls: 0, // 성공하기 전에 "진행 중"으로 답하는 횟수 (JS 는 3초 + 4초 간격으로 확인하므로 0 이면 약 3초, 1 이면 약 7초)
     tasks: {}, downloads: [], msImages: {},
@@ -30,11 +30,11 @@ const init = () => {
   const ROUTES = {
     cloudflare: [['POST', /^\/accounts\/\{account\}\/ai\/run\/@cf\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/, /^(application\/json|multipart\/form-data; boundary=)/], ['GET', /^\/accounts\/\{account\}\/ai\/models\/search$/, null]],
     gemini: [['POST', /^\/models\/[A-Za-z0-9][A-Za-z0-9._-]{0,60}:generateContent$/, /^application\/json$/], ['GET', /^\/models$/, null]],
-    huggingface: [['POST', /^\/fal-ai\/fal-ai\/flux-lora-fill$/, /^application\/json$/]],
+    fal: [['POST', /^\/fal-ai\/fal-ai\/flux-lora-fill$/, /^application\/json$/]],
     modelscope: [['POST', /^\/images\/generations$/, /^application\/json$/], ['GET', /^\/tasks\/[A-Za-z0-9][A-Za-z0-9._-]{5,79}$/, null], ['GET', /^\/models$/, null]],
   };
   /** 결과 이미지 내려받기 주소 검사(네이티브 checkResultUrl 과 같은 규칙): https · 사용자 정보/포트/조각 없음 · 허용 도메인 */
-  const HOSTS = { modelscope: /^([a-z0-9-]+\.)*(aliyuncs\.com|modelscope\.cn|modelscope\.ai)$/, huggingface: /^([a-z0-9-]+\.)*(fal\.media|fal\.run)$/ };
+  const HOSTS = { modelscope: /^([a-z0-9-]+\.)*(aliyuncs\.com|modelscope\.cn|modelscope\.ai)$/, fal: /^([a-z0-9-]+\.)*(fal\.media|fal\.run)$/ };
   const urlOk = (raw, provider) => {
     let u; try { u = new URL(String(raw)); } catch (e) { return false; }
     return HOSTS[provider] && u.protocol === 'https:' && !u.username && !u.password && !u.port && !u.hash
@@ -107,7 +107,7 @@ const init = () => {
 
   async function run(id) {
     const j = S.jobs[id], p = j.spec.provider;
-    // ------------------------------------------------------------ 결과 이미지 내려받기 (인증 없음): ModelScope(OSS) · Hugging Face(fal)
+    // ------------------------------------------------------------ 결과 이미지 내려받기 (인증 없음): ModelScope(OSS) · fal.ai(fal.media)
     if (j.spec.url) {
       S.downloads.push(j.spec.url); S.log.push({ provider: p, kind: 'download', url: j.spec.url });
       await sleep(40);
@@ -147,14 +147,14 @@ const init = () => {
       return finishJson(j, id, { candidates: [{ content: { role: 'model', parts: [{ text: 'Here is the image.' }, { inlineData: { mimeType: 'image/png', data: b64 } }] }, finishReason: 'STOP' }] });
     }
 
-    // ------------------------------------------------------------ Hugging Face: FLUX.1 Fill (fal) — 흰 마스크 안쪽만 채운다
-    if (p === 'huggingface') {
+    // ------------------------------------------------------------ fal.ai: FLUX.1 Fill (fal.run) — 흰 마스크 안쪽만 채운다
+    if (p === 'fal') {
       const body = JSON.parse(new TextDecoder().decode(decodeChunks(j)));
       const A = await bmpOf(dataUrlBlob(body.image_url)), M = await bmpOf(dataUrlBlob(body.mask_url));
       const orig = dataOf(A), region = whiteMask(dataOf(M));
       S.log.push({ provider: p, kind: 'edit', path: String(j.spec.path), type: j.spec.type, prompt: body.prompt, keys: Object.keys(body), sync: body.sync_mode, imgW: A.width, imgH: A.height, maskW: M.width, maskH: M.height, transparent: region.cnt, bbox: region.bbox });
       if (!(await waitOrCancel(j))) return;
-      if (S.hfMode === 'gated') return fail(j, 403, 'http_403', 'Access to model black-forest-labs/FLUX.1-Fill-dev is restricted. You must be authenticated to access it.');
+      if (S.hfMode === 'gated') return fail(j, 403, 'http_403', 'forbidden');
       if (modeFail(j, p)) return;
       const out = await toPng(paintResult(orig, region, A.width, A.height));
       if (S.hfMode === 'url') { const url = `https://v3.fal.media/files/zebra/res-${id}.png`; S.msImages[url] = out; return finishJson(j, id, { images: [{ url, content_type: 'image/png' }] }); }

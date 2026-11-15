@@ -34,7 +34,7 @@ import javax.net.ssl.SSLException;
  * AI 요청 릴레이. 웹 페이지(WebView)는 CSP 와 외부 요청 차단 때문에 인터넷에 직접 접근할 수 없으므로,
  * 허용된 제공자(서버)·경로로만 이 클래스가 대신 요청한다.
  *
- * - 제공자 프로필: cloudflare(Workers AI) / modelscope(API-Inference 이미지 편집, 비동기 작업) / gemini(generateContent) / huggingface(FLUX.1 Fill, fal 경유).
+ * - 제공자 프로필: cloudflare(Workers AI) / modelscope(API-Inference 이미지 편집, 비동기 작업) / gemini(generateContent) / fal(fal.ai 직접, FLUX.1 Fill).
  *   서버는 프로필의 https 주소 하나뿐이다. 예외는 결과 이미지 내려받기 하나: modelscope 가 응답으로 알려 주는 이미지 주소를
  *   허용된 도메인 접미사(aliyuncs.com · modelscope.cn · modelscope.ai) 안에서만 받는다(https, 자격 증명·포트 없음).
  * - 경로는 프로필별 허용 목록(정규식)만, 요청 본문 형식도 경로별로 제한. 리다이렉트는 따라가지 않는다.
@@ -134,10 +134,10 @@ final class AiClient {
         PROFILES.put("gemini", new Profile("gemini", "x-goog-api-key", "", true, null,
                 new Route("POST", "^/models/[A-Za-z0-9][A-Za-z0-9._-]{0,60}:generateContent$", JSON_TYPE),
                 new Route("GET", "^/models$", null)));
-        // Hugging Face Inference Providers(fal-ai 경유) — FLUX.1 Fill [dev] 마스크 인페인팅. 결과가 주소로 오면 fal 도메인에서만 내려받는다
-        PROFILES.put("huggingface", new Profile("huggingface", "Authorization", "Bearer ", true,
+        // fal.ai 직접 API(fal.run, 동기) — FLUX.1 Fill [dev] 마스크 인페인팅(fal-ai/flux-lora-fill). 키는 "Authorization: Key <키>". 결과가 주소로 오면 fal 도메인에서만 내려받는다
+        PROFILES.put("fal", new Profile("fal", "Authorization", "Key ", true,
                 Pattern.compile("^([a-z0-9-]+\\.)*(fal\\.media|fal\\.run)$"),
-                new Route("POST", "^/fal-ai/fal-ai/flux-lora-fill$", JSON_TYPE)));
+                new Route("POST", "^/fal-ai/flux-lora-fill$", JSON_TYPE)));
         // API-Inference: 이미지 생성은 비동기 작업(POST 로 task_id → GET 으로 상태 확인 → 결과 이미지 주소 내려받기)
         PROFILES.put("modelscope", new Profile("modelscope", "Authorization", "Bearer ", true,
                 Pattern.compile("^([a-z0-9-]+\\.)*(aliyuncs\\.com|modelscope\\.cn|modelscope\\.ai)$"),

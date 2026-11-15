@@ -1,4 +1,4 @@
-// AI 설정: 제공자 선택(Cloudflare · ModelScope Qwen-Image-Edit · Gemini · Hugging Face FLUX.1 Fill) · API 키/토큰(기기 Keystore 에 암호화 저장) · 모델 · 연결 테스트 · 개인정보 안내
+// AI 설정: 제공자 선택(Cloudflare · ModelScope Qwen-Image-Edit · Gemini · fal.ai FLUX.1 Fill) · API 키/토큰(기기 Keystore 에 암호화 저장) · 모델 · 연결 테스트 · 개인정보 안내
 import { h } from '../ui/dom.js';
 import { t } from '../i18n.js';
 import { openModal, Segmented, Chips, Btn, toast, confirmDialog } from '../ui/components.js';
@@ -8,7 +8,7 @@ import { PROVIDERS, PROVIDER_IDS, getProvider, isCfGenerateModel } from '../ai/p
 
 const AI_DEFAULTS = { provider: 'cloudflare', ctx: 1, feather: 30, tone: true, translate: true };
 const P_DEFAULTS = () => ({ model: MODEL_AUTO, custom: '', models: [], mode: 'edit' }); // mode: Gemini 의 편집/문구 채우기
-const REMOVED = ['openai', 'openrouter', 'pollinations']; // 삭제된 제공자(OpenAI·OpenRouter 1.5.0, Pollinations 1.6.0)
+const REMOVED = ['openai', 'openrouter', 'pollinations', 'huggingface']; // 삭제된 제공자(OpenAI·OpenRouter 1.5.0, Pollinations 1.6.0)
 
 /**
  * 설정의 AI 항목(같은 객체를 계속 돌려준다 — 여러 곳에서 고쳐도 한 객체에 모이도록). 키 자체는 여기 없다(네이티브 Keystore).
@@ -187,7 +187,7 @@ export function openAiSettings(app, opts = {}) {
         extraInput.value = pi.extra || extraInput.value;
         body.append(h('div', { class: 'sheet-sec' }, P.extra.label()), extraInput);
       }
-      keyInput.placeholder = { modelscope: t('ModelScope 액세스 토큰', 'ModelScope access token'), gemini: t('Gemini API 키 (AIza…)', 'Gemini API key (AIza…)'), huggingface: t('Hugging Face 토큰 (hf_…)', 'Hugging Face token (hf_…)') }[pid] || t('API 토큰', 'API token');
+      keyInput.placeholder = { modelscope: t('ModelScope 액세스 토큰', 'ModelScope access token'), gemini: t('Gemini API 키 (AIza…)', 'Gemini API key (AIza…)'), fal: t('fal.ai API 키 (아이디:비밀값)', 'fal.ai API key (id:secret)') }[pid] || t('API 토큰', 'API token');
       body.append(keyInput,
         h('div', { class: 'row wrap' }, Btn(hasKey ? t('저장 / 바꾸기', 'Save / replace') : t('키 저장', 'Save key'), 'tonal', saveKey, 'key-round'), hasKey ? Btn(t('키 삭제', 'Remove'), 'outlined', clearKey, 'trash-2') : null));
       if (keyMsg) body.append(h('p', { class: 'ai-keymsg ' + keyMsg.kind, role: keyMsg.kind === 'err' ? 'alert' : 'status' }, keyMsg.text));

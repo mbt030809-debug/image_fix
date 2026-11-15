@@ -1,4 +1,4 @@
-// AI 기능(영역 선택 · 요청 계획 · Cloudflare / ModelScope / Gemini / Hugging Face 요청·응답·오류) 순수 로직 단위 테스트. 실행: node web/tests/ai.unit.mjs
+// AI 기능(영역 선택 · 요청 계획 · Cloudflare / ModelScope / Gemini / fal.ai 요청·응답·오류) 순수 로직 단위 테스트. 실행: node web/tests/ai.unit.mjs
 import {
   newMask, rasterPolygon, rectPts, ellipsePts, combine, stampOp, strokeOp, invertMask, bboxOf, coverage,
   growMask, featherU8, sampleMask, contourSegments,
@@ -9,7 +9,7 @@ import {
 import { buildMultipart, explainError, cleanKey, MODEL_AUTO } from '../src/ai/common.js';
 import {
   PROVIDERS, PROVIDER_IDS, getProvider, SIZES_FREE, SIZES_CF, CF_MODELS, CF_GENERATE_MODELS, CF_MODEL_RE, isCfGenerateModel, modelProfile, hasHangul, translateToEnglish, parseAccountId,
-  base64ToBlob, sniffType, ensureImageBlob, instruct, parseCfModels, parseCloudflareImage, dataUrlToBlob, instructOne, GM_MODELS, GM_MODEL_RE, parseGeminiImage, parseGeminiModels, HF_MODEL, parseFalImage, MS_EDIT_TASK,
+  base64ToBlob, sniffType, ensureImageBlob, instruct, parseCfModels, parseCloudflareImage, dataUrlToBlob, instructOne, GM_MODELS, GM_MODEL_RE, parseGeminiImage, parseGeminiModels, FAL_MODEL, parseFalImage, MS_EDIT_TASK,
   MS_MODELS, MS_MODEL_RE, parseModelScopeTask, modelscopeGenerate, sleepAbortable,
 } from '../src/ai/providers.js';
 import { AiError } from '../src/ai/client.js';
@@ -244,7 +244,7 @@ section('common: errors / key');
   ok(k({ status: 400, code: '400', message: 'API key not valid. Please pass a valid API key.' }) === 'key' && explainError({ status: 400, message: 'API key not valid' }).settings, 'Gemini invalid key (HTTP 400) → key error');
   ok(k({ status: 429, code: 'RESOURCE_EXHAUSTED', message: 'Quota exceeded for metric: generate_content_free_tier_requests, limit: 0' }) === 'freezero' && k({ status: 429, message: 'You exceeded your current quota' }) === 'quota', 'Gemini free quota 0 → billing hint; other 429 quota unchanged');
   ok(k({ code: 'moderation_blocked', status: 200, message: 'blocked: SAFETY' }) === 'policy', 'Gemini safety block → policy message');
-  ok(k({ status: 403, message: 'Access to model black-forest-labs/FLUX.1-Fill-dev is restricted. You must be authenticated to access it. (gated)' }) === 'gated' && explainError({ status: 403, message: 'gated repo' }).settings && k({ status: 403, message: 'forbidden' }) === 'forbidden', 'Hugging Face gated model → accept the terms (before the generic 403)');
+  ok(k({ status: 403, message: 'forbidden' }) === 'forbidden' && explainError({ status: 403 }).settings && k({ status: 404, message: 'Application not found' }) === 'model', 'fal.ai: 403 → permission, 404 → model not found');
   const tf = explainError({ code: 'task_failed', status: 200, message: 'content blocked' });
   ok(tf.key === 'taskfail' && /content blocked/.test(tf.text) && k({ code: 'task_failed' }) === 'taskfail', 'ModelScope task failed keeps the reason');
   ok(k({ code: 'no_task', status: 200 }) === 'notask' && k({ code: 'no_image', message: 'I cannot' }) === 'noimage' && /I cannot/.test(explainError({ code: 'no_image', message: 'I cannot' }).text), 'no task id / no image (message kept)');
@@ -379,19 +379,19 @@ section('providers: Gemini (generateContent)');
   ok(/magenta/.test(instructOne('x')) && !/Image 2/.test(instructOne('x')) && instructOne('y'.repeat(5000)).split('Request: ')[1].length === 1500, 'single-image instruction');
 }
 
-section('providers: Hugging Face (FLUX.1 Fill via fal)');
+section('providers: fal.ai (FLUX.1 Fill)');
 {
-  const H = PROVIDERS.huggingface;
+  const H = PROVIDERS.fal;
   const img = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])], { type: 'image/png' });
   const mask = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 7, 7])], { type: 'image/png' });
-  const req = await H.buildEdit({ model: HF_MODEL, prompt: '  a clear blue sky  ', size: SIZES_FREE[0] }, { image: img, mask });
+  const req = await H.buildEdit({ model: FAL_MODEL, prompt: '  a clear blue sky  ', size: SIZES_FREE[0] }, { image: img, mask });
   const body = JSON.parse(await req.body.text());
-  ok(req.method === 'POST' && req.path === '/fal-ai/fal-ai/flux-lora-fill' && req.contentType === 'application/json', 'request shape');
+  ok(req.method === 'POST' && req.path === '/fal-ai/flux-lora-fill' && req.contentType === 'application/json', 'request shape');
   ok(body.prompt === 'a clear blue sky' && body.image_url === 'data:image/png;base64,' + Buffer.from(await img.arrayBuffer()).toString('base64') && body.mask_url === 'data:image/png;base64,' + Buffer.from(await mask.arrayBuffer()).toString('base64') && body.sync_mode === true && body.output_format === 'png', 'prompt + image + mask as data URLs, synchronous');
-  ok(H.usesMask && H.maskKind === 'white' && modelProfile('huggingface', HF_MODEL).usesMask && modelProfile('huggingface', HF_MODEL).maskKind === 'white' && modelProfile('huggingface', HF_MODEL).mode === 'edit', 'uses a real (white = fill) mask');
+  ok(H.usesMask && H.maskKind === 'white' && modelProfile('fal', FAL_MODEL).usesMask && modelProfile('fal', FAL_MODEL).maskKind === 'white' && modelProfile('fal', FAL_MODEL).mode === 'edit', 'uses a real (white = fill) mask');
   const relay = scripted([jsonRes({ images: [{ url: 'data:image/png;base64,' + PNG, content_type: 'image/png' }] })]);
   const out = await H.edit(req, {}, relay);
-  ok(out.length === 1 && out[0].type === 'image/png' && relay.calls.length === 1 && relay.calls[0].provider === 'huggingface', 'data-URL result decoded, no extra request');
+  ok(out.length === 1 && out[0].type === 'image/png' && relay.calls.length === 1 && relay.calls[0].provider === 'fal', 'data-URL result decoded, no extra request');
   const relay2 = scripted([jsonRes({ images: [{ url: 'https://v3.fal.media/files/a/x.png' }] }), imgRes()]);
   const phases = [];
   const out2 = await H.edit(req, { onPhase: (p) => phases.push(p) }, relay2);
@@ -500,7 +500,7 @@ section('providers: ModelScope (async task + download)');
 
 section('providers: registry / sizes / config');
 {
-  ok(PROVIDER_IDS.join() === 'cloudflare,modelscope,gemini,huggingface', 'provider ids: Cloudflare, ModelScope, Gemini, Hugging Face');
+  ok(PROVIDER_IDS.join() === 'cloudflare,modelscope,gemini,fal', 'provider ids: Cloudflare, ModelScope, Gemini, fal.ai');
   ok(!('openai' in PROVIDERS) && !('openrouter' in PROVIDERS) && !('pollinations' in PROVIDERS), 'OpenAI / OpenRouter / Pollinations are gone');
   for (const id of PROVIDER_IDS) {
     const P = PROVIDERS[id];
@@ -508,14 +508,14 @@ section('providers: registry / sizes / config');
     const all = [P.name(), P.tag(), P.desc(), P.howto(), P.privacy('h'), P.privacyText('h')].join(' ');
     ok(!/openai|openrouter|gpt-image/i.test(all), 'no stale OpenAI/OpenRouter wording: ' + id);
   }
-  const { cloudflare: CF, modelscope: MS, gemini: GM, huggingface: HF } = PROVIDERS;
+  const { cloudflare: CF, modelscope: MS, gemini: GM, fal: HF } = PROVIDERS;
   ok(PROVIDER_IDS.every((id) => !PROVIDERS[id].noKey && !PROVIDERS[id].genOnly), 'every provider needs a key; none is generation-only');
   ok(PROVIDER_IDS.every((id) => typeof PROVIDERS[id].buildEdit === 'function' && typeof PROVIDERS[id].edit === 'function'), 'every provider can edit');
   ok(typeof CF.generate === 'function' && typeof GM.generate === 'function' && MS.generate === undefined && HF.generate === undefined && CF.canFill && GM.canFill && !MS.canFill && !HF.canFill, 'text-to-image / "fill from prompt": Cloudflare and Gemini only');
   ok(CF.extra && CF.extra.id === 'account' && MS.extra === null && GM.extra === null && HF.extra === null, 'only Cloudflare needs an account ID');
-  ok(!CF.usesMask && !MS.usesMask && !GM.usesMask && HF.usesMask && MS.oneImage && !CF.oneImage, 'only Hugging Face uses a real mask; ModelScope takes one marked photo');
-  ok(CF.autoModel === CF_MODELS[0] && MS.autoModel === MS_MODELS[0] && GM.autoModel === GM_MODELS[0] && HF.autoModel === HF_MODEL && MS.modelPresets === MS_MODELS && GM.modelPresets === GM_MODELS && HF.modelPresets.length === 0, 'auto models + presets');
-  ok(CF.host() === 'api.cloudflare.com' && MS.host() === 'api-inference.modelscope.cn' && GM.host() === 'generativelanguage.googleapis.com' && HF.host() === 'router.huggingface.co', 'provider hosts');
+  ok(!CF.usesMask && !MS.usesMask && !GM.usesMask && HF.usesMask && MS.oneImage && !CF.oneImage, 'only fal.ai uses a real mask; ModelScope takes one marked photo');
+  ok(CF.autoModel === CF_MODELS[0] && MS.autoModel === MS_MODELS[0] && GM.autoModel === GM_MODELS[0] && HF.autoModel === FAL_MODEL && MS.modelPresets === MS_MODELS && GM.modelPresets === GM_MODELS && HF.modelPresets.length === 0, 'auto models + presets');
+  ok(CF.host() === 'api.cloudflare.com' && MS.host() === 'api-inference.modelscope.cn' && GM.host() === 'generativelanguage.googleapis.com' && HF.host() === 'fal.run', 'provider hosts');
   ok(/저장·개선/.test(MS.privacy('h')) && /Google/.test(GM.privacy('h')) && /fal/.test(HF.privacy('h')) && !/저장·개선/.test(CF.privacy('h')), 'data-use warnings (trial service / Google free tier / fal via HF)');
   ok(PROVIDER_IDS.every((id) => /h/.test(PROVIDERS[id].privacyText('h'))) && /사진은 보내지 않아요/.test(CF.privacyText('h')) && /사진은 보내지 않아요/.test(GM.privacyText('h')) && /알리바바/.test(MS.privacy('h')), 'privacy notes');
   ok(getProvider('nope') === CF && getProvider(undefined) === CF && getProvider('modelscope') === MS, 'getProvider falls back to Cloudflare');

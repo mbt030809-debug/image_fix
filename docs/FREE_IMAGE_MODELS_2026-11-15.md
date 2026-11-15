@@ -2,7 +2,7 @@
 
 > 이 환경에서는 YouTube 영상을 직접 볼 수 없어 **웹 검색 결과(영상 제목·설명 포함)와 공식 문서/포럼 요약**으로 정리했다. 무료 조건은 자주 바뀌고 출처 일부는 업체 블로그라서, 쓰기 전에 각 서비스의 현재 약관·요금 페이지를 확인할 것.
 
-> **v1.6.0 갱신**: 앱의 AI 제공자는 **Cloudflare · ModelScope(Qwen-Image-Edit 편집) · Gemini · Hugging Face(FLUX.1 Fill)** 4종이다. **OpenAI·OpenRouter(1.5.0)·Pollinations(1.6.0)는 삭제**했고, ModelScope 는 문구 생성 대신 편집으로 바꿨다. 아래 표의 해당 행은 조사 기록으로 남긴다. Gemini 이미지 모델은 무료 한도가 0 일 수 있어 "내 키" 방식으로 넣었고, Hugging Face FLUX.1 Fill 은 서버리스 제공 여부를 확인하지 못했다(실험적).
+> **v1.7.1 갱신**: Hugging Face 라우터에서는 FLUX.1 Fill 이 "모델을 찾을 수 없어요"(404)로 동작하지 않아 앱의 해당 제공자를 **fal.ai 직접 API**(`fal.run/fal-ai/flux-lora-fill`, 유료/체험 크레딧)로 바꿨다. **v1.6.0 갱신**: 앱의 AI 제공자는 **Cloudflare · ModelScope(Qwen-Image-Edit 편집) · Gemini · Hugging Face(FLUX.1 Fill)** 4종이다. **OpenAI·OpenRouter(1.5.0)·Pollinations(1.6.0)는 삭제**했고, ModelScope 는 문구 생성 대신 편집으로 바꿨다. 아래 표의 해당 행은 조사 기록으로 남긴다. Gemini 이미지 모델은 무료 한도가 0 일 수 있어 "내 키" 방식으로 넣었고, Hugging Face FLUX.1 Fill 은 서버리스 제공 여부를 확인하지 못했다(실험적).
 
 ## 결론
 - **유튜브에서 가장 많이 소개되는 무료 이미지 생성 API = Cloudflare Workers AI** (영상 대부분이 `FLUX.1 schnell` 로 문구→이미지). → 앱에 반영했다.
