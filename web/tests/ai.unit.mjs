@@ -1,4 +1,4 @@
-// AI 기능(영역 선택 · 요청 계획 · Cloudflare / Pollinations / ModelScope 요청·응답·오류) 순수 로직 단위 테스트. 실행: node web/tests/ai.unit.mjs
+// AI 기능(영역 선택 · 요청 계획 · Cloudflare / ModelScope / Gemini / Hugging Face 요청·응답·오류) 순수 로직 단위 테스트. 실행: node web/tests/ai.unit.mjs
 import {
   newMask, rasterPolygon, rectPts, ellipsePts, combine, stampOp, strokeOp, invertMask, bboxOf, coverage,
   growMask, featherU8, sampleMask, contourSegments,
@@ -8,8 +8,8 @@ import {
 } from '../src/ai/plan.js';
 import { buildMultipart, explainError, cleanKey, MODEL_AUTO } from '../src/ai/common.js';
 import {
-  PROVIDERS, PROVIDER_IDS, getProvider, SIZES_FREE, SIZES_CF, SIZES_PLN, CF_MODELS, CF_GENERATE_MODELS, CF_MODEL_RE, isCfGenerateModel, modelProfile, hasHangul, translateToEnglish, parseAccountId,
-  base64ToBlob, sniffType, ensureImageBlob, instruct, parseCfModels, parseCloudflareImage, encodePromptPath, pollinationsPath,
+  PROVIDERS, PROVIDER_IDS, getProvider, SIZES_FREE, SIZES_CF, CF_MODELS, CF_GENERATE_MODELS, CF_MODEL_RE, isCfGenerateModel, modelProfile, hasHangul, translateToEnglish, parseAccountId,
+  base64ToBlob, sniffType, ensureImageBlob, instruct, parseCfModels, parseCloudflareImage, dataUrlToBlob, instructOne, GM_MODELS, GM_MODEL_RE, parseGeminiImage, parseGeminiModels, HF_MODEL, parseFalImage, MS_EDIT_TASK,
   MS_MODELS, MS_MODEL_RE, parseModelScopeTask, modelscopeGenerate, sleepAbortable,
 } from '../src/ai/providers.js';
 import { AiError } from '../src/ai/client.js';
@@ -240,8 +240,9 @@ section('common: errors / key');
   ok(k({ status: 403, code: 'cf_5035', message: 'This model requires the Workers Paid plan' }) === 'paidplan' && explainError({ status: 403, code: 'cf_5035' }).settings, 'cloudflare paid-plan-only model (5035)');
   ok(k({ status: 429, code: 'cf_3040', message: 'Out of capacity' }) === 'capacity', 'cloudflare out of capacity (3040)');
   ok(k({ code: 'no_account' }) === 'account' && explainError({ code: 'no_account' }).settings && k({ code: 'no_key' }) === 'key', 'missing account ID / key → open settings');
-  // Pollinations / ModelScope
-  ok(k({ status: 429, code: 'rate_free' }) === 'ratefree' && k({ status: 402, code: 'rate_free' }) === 'ratefree' && /45/.test(explainError({ code: 'rate_free' }).text), 'Pollinations free rate limit → "one image per ~45 s"');
+  // ModelScope / Gemini
+  ok(k({ code: 'moderation_blocked', status: 200, message: 'blocked: SAFETY' }) === 'policy', 'Gemini safety block → policy message');
+  ok(k({ status: 403, message: 'Access to model black-forest-labs/FLUX.1-Fill-dev is restricted. You must be authenticated to access it. (gated)' }) === 'gated' && explainError({ status: 403, message: 'gated repo' }).settings && k({ status: 403, message: 'forbidden' }) === 'forbidden', 'Hugging Face gated model → accept the terms (before the generic 403)');
   const tf = explainError({ code: 'task_failed', status: 200, message: 'content blocked' });
   ok(tf.key === 'taskfail' && /content blocked/.test(tf.text) && k({ code: 'task_failed' }) === 'taskfail', 'ModelScope task failed keeps the reason');
   ok(k({ code: 'no_task', status: 200 }) === 'notask' && k({ code: 'no_image', message: 'I cannot' }) === 'noimage' && /I cannot/.test(explainError({ code: 'no_image', message: 'I cannot' }).text), 'no task id / no image (message kept)');
@@ -336,51 +337,76 @@ section('providers: Cloudflare request builders / parse');
   ok(parseCfModels(null).length === 0 && parseCfModels({}).length === 0, 'parseCfModels tolerant');
 }
 
-section('providers: Pollinations (no key)');
+section('providers: Gemini (generateContent)');
 {
-  ok(encodePromptPath('a red boat') === 'a%20red%20boat' && encodePromptPath('  a   red\n boat ') === 'a%20red%20boat', 'spaces → %20, whitespace collapsed');
-  const ko = encodePromptPath('노을 진 바다');
-  ok(ko === encodeURIComponent('노을 진 바다') && decodeURIComponent(ko) === '노을 진 바다', 'Korean is percent-encoded UTF-8');
-  const odd = encodePromptPath("it's (a) test! *ok* ~ x/y?z#w&q=1 a+b %");
-  ok(/^[A-Za-z0-9%._~-]+$/.test(odd) && decodeURIComponent(odd) === "it's (a) test! *ok* ~ x/y?z#w&q=1 a+b %", 'only characters the native allowlist accepts, and it round-trips');
-  ok(encodePromptPath('') === '' && encodePromptPath('   ') === '' && encodePromptPath(null) === '' && encodePromptPath(undefined) === '', 'empty → ""');
-  ok(encodePromptPath('a\ud800b') === 'ab' && encodePromptPath('x\udc00y') === 'xy' && encodePromptPath('🙂') === '%F0%9F%99%82', 'lone surrogates dropped (no URIError), emoji kept');
-  const capped = encodePromptPath('가'.repeat(2000), 1800);
-  ok(capped.length > 0 && capped.length <= 1800 && decodeURIComponent(capped).split('').every((c) => c === '가'), 'long prompt shortened to fit, never cut mid-character');
-  ok(encodePromptPath('x'.repeat(50), 10).length <= 10 || encodePromptPath('x'.repeat(50), 10).length === 1, 'tiny limit still terminates');
+  const G = PROVIDERS.gemini;
+  const img = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])], { type: 'image/png' });
+  const marked = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 9, 9, 9, 9])], { type: 'image/png' });
+  ok(GM_MODEL_RE.test('gemini-2.5-flash-image') && GM_MODEL_RE.test('gemini-3-pro-image-preview') && GM_MODELS.every((m) => GM_MODEL_RE.test(m)) && !GM_MODEL_RE.test('gpt-4') && !GM_MODEL_RE.test('gemini-../x') && !GM_MODEL_RE.test('gemini-a:generateContent') && !GM_MODEL_RE.test('gemini-'), 'GM_MODEL_RE');
+  const req = await G.buildEdit({ model: GM_MODELS[0], prompt: '하늘을 바꿔 주세요', size: SIZES_FREE[0] }, { image: img, marked });
+  const body = JSON.parse(await req.body.text());
+  const parts = body.contents[0].parts;
+  ok(req.method === 'POST' && req.path === '/models/gemini-2.5-flash-image:generateContent' && req.contentType === 'application/json', 'edit request shape');
+  ok(parts.length === 3 && /Image 1/.test(parts[0].text) && /Image 2/.test(parts[0].text) && /하늘을 바꿔 주세요$/.test(parts[0].text) && parts[1].inlineData.mimeType === 'image/png' && parts[1].inlineData.data === Buffer.from(await img.arrayBuffer()).toString('base64') && parts[2].inlineData.data === Buffer.from(await marked.arrayBuffer()).toString('base64'), 'parts: instruction + original + marked copy as inlineData');
+  ok(body.generationConfig.responseModalities.join() === 'TEXT,IMAGE', 'asks for an image back');
+  const bad = await throwsAi(() => G.buildEdit({ model: '../evil', prompt: 'x', size: SIZES_FREE[0] }, { image: img, marked }));
+  ok(bad instanceof AiError && bad.info.status === 404, 'malformed model rejected');
+  const okJson = { candidates: [{ content: { parts: [{ text: 'here you go' }, { inlineData: { mimeType: 'image/png', data: PNG } }] }, finishReason: 'STOP' }] };
+  const r1 = parseGeminiImage(okJson), r2 = parseGeminiImage({ candidates: [{ content: { parts: [{ inline_data: { mime_type: 'image/jpeg', data: 'QQ==' } }] } }] });
+  ok(r1.b64 === PNG && r1.type === 'image/png' && r2.b64 === 'QQ==' && r2.type === 'image/jpeg', 'parseGeminiImage: inlineData / inline_data');
+  const t1 = parseGeminiImage({ candidates: [{ content: { parts: [{ text: 'I cannot edit that.' }] }, finishReason: 'STOP' }] });
+  const t2 = parseGeminiImage({ promptFeedback: { blockReason: 'SAFETY' } });
+  const t3 = parseGeminiImage({ candidates: [{ finishReason: 'IMAGE_SAFETY' }] });
+  ok(!t1.b64 && !t1.blocked && /cannot edit/.test(t1.reason) && !t2.b64 && t2.blocked && /SAFETY/.test(t2.reason) && t3.blocked && !parseGeminiImage(null).b64, 'text-only / blocked / empty replies carry a reason');
+  const relay = scripted([jsonRes(okJson)]);
+  const out = await G.edit(req, { tag: 1 }, relay);
+  ok(out.length === 1 && out[0].type === 'image/png' && relay.calls[0].provider === 'gemini' && relay.calls[0].req === req && relay.calls[0].opts.tag === 1, 'edit(): relays and returns the image');
+  const e1 = await throwsAi(() => G.edit(req, {}, scripted([jsonRes({ candidates: [{ content: { parts: [{ text: 'Sorry, text only.' }] } }] })])));
+  const e2 = await throwsAi(() => G.edit(req, {}, scripted([jsonRes({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } })])));
+  const e3 = await throwsAi(() => G.edit(req, {}, scripted([{ blob: new Blob(['<html>'], { type: 'text/html' }), ctype: 'text/html' }])));
+  ok(e1.info.code === 'no_image' && /text only/.test(e1.info.message) && e2.info.code === 'moderation_blocked' && explainError(e2.info).key === 'policy' && e3.info.code === 'bad_response', 'no image → no_image (reason kept) / blocked → policy / not JSON → bad_response');
+  const gr = scripted([jsonRes(okJson)]);
+  await G.generate({ model: GM_MODELS[0], prompt: 'a red boat', size: SIZES_FREE[1] }, {}, gr);
+  const gb = JSON.parse(await gr.calls[0].req.body.text());
+  ok(gb.contents[0].parts.length === 1 && gb.contents[0].parts[0].text === 'a red boat' && gb.generationConfig.imageConfig.aspectRatio === '3:2' && gr.calls[0].req.path === '/models/gemini-2.5-flash-image:generateContent', 'generate(): prompt only (no photo), landscape aspect ratio');
+  const gr2 = scripted([jsonRes(okJson)]), gr3 = scripted([jsonRes(okJson)]);
+  await G.generate({ model: GM_MODELS[0], prompt: 'x', size: SIZES_FREE[0] }, {}, gr2); await G.generate({ model: GM_MODELS[0], prompt: 'x', size: SIZES_FREE[2] }, {}, gr3);
+  ok(!('imageConfig' in JSON.parse(await gr2.calls[0].req.body.text()).generationConfig) && JSON.parse(await gr3.calls[0].req.body.text()).generationConfig.imageConfig.aspectRatio === '2:3', 'square: no aspect field; portrait: 2:3');
+  ok(parseGeminiModels({ models: [{ name: 'models/gemini-2.5-flash-image' }, { name: 'models/gemini-2.5-pro' }, { name: 'models/gemini-3-pro-image-preview' }, null, { name: 'models/embedding-001' }] }).join() === 'gemini-2.5-flash-image,gemini-3-pro-image-preview' && parseGeminiModels(null).length === 0, 'parseGeminiModels keeps image models only');
+  ok(dataUrlToBlob('data:image/png;base64,' + PNG).type === 'image/png' && dataUrlToBlob('data:text/plain,hi') === null && dataUrlToBlob('http://x') === null && dataUrlToBlob(null) === null, 'dataUrlToBlob');
+  ok(/magenta/.test(instructOne('x')) && !/Image 2/.test(instructOne('x')) && instructOne('y'.repeat(5000)).split('Request: ')[1].length === 1500, 'single-image instruction');
+}
 
-  ok(pollinationsPath('a red boat', SIZES_PLN[1], 42) === '/prompt/a%20red%20boat?width=896&height=640&seed=42', 'path + query');
-  ok(pollinationsPath('x', null, 'abc') === '/prompt/x?width=768&height=768&seed=0' && pollinationsPath('x', SIZES_PLN[0], -5.7) === '/prompt/x?width=768&height=768&seed=6', 'default size, sanitised seed');
-  ok(pollinationsPath('x', SIZES_PLN[0], 4294967296 * 3 + 7).endsWith('seed=' + ((4294967296 * 3 + 7) % 2147483647)), 'seed stays below 2^31');
-  ok(pollinationsPath('', SIZES_PLN[0], 1).startsWith('/prompt/?'), 'empty prompt → empty path segment (caller refuses)');
-  const pth = pollinationsPath('노을 진 바다, 고요한 아침', SIZES_PLN[2], 123456);
-  ok(/^\/prompt\/[A-Za-z0-9%._~-]{1,2400}\?[A-Za-z0-9=&._,%:-]{0,160}$/.test(pth), 'result matches the native route + query allowlists');
-
-  const P = PROVIDERS.pollinations;
-  const r1 = scripted([{ blob: JPG(), ctype: 'image/jpeg' }]);
-  const out = await P.generate({ prompt: 'a red boat', size: SIZES_PLN[1] }, { tag: 7 }, r1);
-  const c = r1.calls[0];
-  ok(out.length === 1 && out[0].type === 'image/jpeg' && c.provider === 'pollinations' && c.req.method === 'GET' && !c.req.body && /^\/prompt\/a%20red%20boat\?width=896&height=640&seed=\d+$/.test(c.req.path) && c.opts.tag === 7, 'generate(): GET /prompt/<prompt>?… → JPEG');
-  const seeds = new Set();
-  for (let i = 0; i < 6; i++) { const rr = scripted([{ blob: JPG(), ctype: 'image/jpeg' }]); await P.generate({ prompt: 'x', size: SIZES_PLN[0] }, {}, rr); seeds.add(/seed=(\d+)/.exec(rr.calls[0].req.path)[1]); }
-  ok(seeds.size > 1, 'a fresh random seed per request');
-
-  const rl = await Promise.all([429, 402].map((status) => throwsAi(() => P.generate({ prompt: 'x', size: SIZES_PLN[0] }, {}, async () => { throw new AiError({ status, code: 'http_' + status, message: 'Too many requests' }); }))));
-  ok(rl.every((e) => e instanceof AiError && e.info.code === 'rate_free' && explainError(e.info).key === 'ratefree') && rl[0].info.status === 429 && rl[1].info.status === 402, '429/402 → rate_free (one image per ~45 s)');
-  const s500 = await throwsAi(() => P.generate({ prompt: 'x', size: SIZES_PLN[0] }, {}, async () => { throw new AiError({ status: 500, code: 'http_500', message: 'boom' }); }));
-  const cn = await throwsAi(() => P.generate({ prompt: 'x', size: SIZES_PLN[0] }, {}, async () => { throw new AiError({ code: 'cancelled' }); }));
-  ok(s500.info.status === 500 && s500.info.code === 'http_500' && cn.info.code === 'cancelled', 'other errors pass through unchanged');
-  const html = await throwsAi(() => P.generate({ prompt: 'x', size: SIZES_PLN[0] }, {}, async () => ({ blob: new Blob(['<html>maintenance</html>'], { type: 'text/html' }), ctype: 'text/html' })));
-  const txt = await throwsAi(() => P.generate({ prompt: 'x', size: SIZES_PLN[0] }, {}, async () => ({ blob: new Blob(['Queue full, wait 45 seconds'], { type: 'text/plain' }), ctype: 'text/plain' })));
-  ok(html.info.code === 'no_image' && html.info.message === '' && txt.info.code === 'no_image' && /Queue full/.test(txt.info.message), 'non-image 200 body → no_image (text kept as the reason)');
-  const never = scripted([imgRes()]);
-  const empty = await throwsAi(() => P.generate({ prompt: '   ', size: SIZES_PLN[0] }, {}, never));
-  ok(empty instanceof AiError && empty.info.code === 'no_image' && never.calls.length === 0, 'empty prompt: refused locally, nothing is sent');
+section('providers: Hugging Face (FLUX.1 Fill via fal)');
+{
+  const H = PROVIDERS.huggingface;
+  const img = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])], { type: 'image/png' });
+  const mask = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 7, 7])], { type: 'image/png' });
+  const req = await H.buildEdit({ model: HF_MODEL, prompt: '  a clear blue sky  ', size: SIZES_FREE[0] }, { image: img, mask });
+  const body = JSON.parse(await req.body.text());
+  ok(req.method === 'POST' && req.path === '/fal-ai/fal-ai/flux-lora-fill' && req.contentType === 'application/json', 'request shape');
+  ok(body.prompt === 'a clear blue sky' && body.image_url === 'data:image/png;base64,' + Buffer.from(await img.arrayBuffer()).toString('base64') && body.mask_url === 'data:image/png;base64,' + Buffer.from(await mask.arrayBuffer()).toString('base64') && body.sync_mode === true && body.output_format === 'png', 'prompt + image + mask as data URLs, synchronous');
+  ok(H.usesMask && H.maskKind === 'white' && modelProfile('huggingface', HF_MODEL).usesMask && modelProfile('huggingface', HF_MODEL).maskKind === 'white' && modelProfile('huggingface', HF_MODEL).mode === 'edit', 'uses a real (white = fill) mask');
+  const relay = scripted([jsonRes({ images: [{ url: 'data:image/png;base64,' + PNG, content_type: 'image/png' }] })]);
+  const out = await H.edit(req, {}, relay);
+  ok(out.length === 1 && out[0].type === 'image/png' && relay.calls.length === 1 && relay.calls[0].provider === 'huggingface', 'data-URL result decoded, no extra request');
+  const relay2 = scripted([jsonRes({ images: [{ url: 'https://v3.fal.media/files/a/x.png' }] }), imgRes()]);
+  const phases = [];
+  const out2 = await H.edit(req, { onPhase: (p) => phases.push(p) }, relay2);
+  ok(out2.length === 1 && relay2.calls.length === 2 && relay2.calls[1].req.method === 'GET' && relay2.calls[1].req.url === 'https://v3.fal.media/files/a/x.png' && !relay2.calls[1].req.path && phases.join() === 'download', 'https result URL is downloaded through the relay (phase "download")');
+  const relay3 = scripted([jsonRes({ image: { url: 'data:image/png;base64,' + PNG } })]);
+  ok((await H.edit(req, {}, relay3)).length === 1, '{image:{url}} form accepted');
+  const n1 = await throwsAi(() => H.edit(req, {}, scripted([jsonRes({ images: [] })])));
+  const n2 = await throwsAi(() => H.edit(req, {}, scripted([jsonRes({ images: [{ url: 'data:text/plain;base64,aGk=' }] })])));
+  const n3 = await throwsAi(() => H.edit(req, {}, scripted([{ blob: new Blob(['<html>'], { type: 'text/html' }), ctype: 'text/html' }])));
+  ok(n1.info.code === 'no_image' && n2.info.code === 'no_image' && n3.info.code === 'bad_response', 'no image / non-image data / not JSON');
+  const d1 = await throwsAi(() => H.edit(req, {}, scripted([jsonRes({ images: [{ url: 'https://v3.fal.media/x.png' }] }), { blob: new Blob(['<html>expired</html>'], { type: 'text/html' }), ctype: 'text/html' }])));
+  ok(d1.info.code === 'no_image', 'downloaded file that is not an image → no_image');
 }
 
 section('providers: ModelScope (async task + download)');
 {
-  ok(MS_MODEL_RE.test('Qwen/Qwen-Image') && MS_MODEL_RE.test('Tongyi-MAI/Z-Image-Turbo') && MS_MODEL_RE.test('black-forest-labs/FLUX.1-Krea-dev') && MS_MODELS.every((m) => MS_MODEL_RE.test(m)), 'MS_MODEL_RE accepts the presets');
+  ok(MS_MODEL_RE.test('Qwen/Qwen-Image-Edit') && MS_MODEL_RE.test('Qwen/Qwen-Image-Edit-2509') && MS_MODEL_RE.test('black-forest-labs/FLUX.1-Krea-dev') && MS_MODELS.every((m) => MS_MODEL_RE.test(m)), 'MS_MODEL_RE accepts the presets');
   ok(!MS_MODEL_RE.test('') && !MS_MODEL_RE.test('Qwen') && !MS_MODEL_RE.test('a/b/c') && !MS_MODEL_RE.test('../x') && !MS_MODEL_RE.test('a/../b') && !MS_MODEL_RE.test('/b') && !MS_MODEL_RE.test('a b/c') && !MS_MODEL_RE.test('a/b?x=1'), 'MS_MODEL_RE rejects malformed names');
 
   const ptask = parseModelScopeTask;
@@ -454,43 +480,49 @@ section('providers: ModelScope (async task + download)');
   const tt = Date.now(); await sleepAbortable(20, new AbortController().signal); await sleepAbortable(5);
   ok(Date.now() - tt >= 15, 'sleepAbortable: resolves after the delay (signal optional)');
 
+  // 편집(Qwen-Image-Edit): 표시한 사진 1장 → image/image_url(data URI) + 작업 종류 image-to-image-generation, size 없음
   const PM = PROVIDERS.modelscope;
-  const rP = scripted([jsonRes({ images: [{ url: URL1 }] }), imgRes()]);
-  const viaProvider = await PM.generate({ model: MS_MODELS[1], prompt: 'x', size: SIZES_FREE[0] }, {}, rP);
-  ok(viaProvider.length === 1 && JSON.parse(await rP.calls[0].req.body.text()).model === MS_MODELS[1], 'provider.generate() delegates to the task flow');
+  const marked = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 9, 9, 9])], { type: 'image/png' });
+  const ereq = await PM.buildEdit({ model: MS_MODELS[0], prompt: '하늘을 바꿔 주세요', size: SIZES_FREE[0] }, { image: new Blob(['x']), marked });
+  ok(ereq.model === MS_MODELS[0] && /magenta/.test(ereq.prompt) && /하늘을 바꿔 주세요$/.test(ereq.prompt) && ereq.image === 'data:image/png;base64,' + Buffer.from(await marked.arrayBuffer()).toString('base64'), 'buildEdit: marked photo as a data URL + single-image instruction');
+  const phE = [], rE = scripted([jsonRes({ task_id: TASK }), jsonRes({ task_status: 'SUCCEED', output_images: [URL1] }), imgRes()]);
+  const edited = await PM.edit(ereq, { onPhase: (p) => phE.push(p) }, rE);
+  const eb = JSON.parse(await rE.calls[0].req.body.text());
+  ok(edited.length === 1 && edited[0].type === 'image/png' && eb.model === MS_MODELS[0] && eb.image === ereq.image && eb.image_url === ereq.image && !('size' in eb) && rE.calls[0].req.tt === MS_EDIT_TASK && rE.calls[1].req.tt === MS_EDIT_TASK && rE.calls[2].req.tt === undefined && MS_EDIT_TASK === 'image-to-image-generation', 'edit(): submit + poll carry the image-to-image task type; the download does not');
+  const bm = await throwsAi(() => PM.buildEdit({ model: '../x', prompt: 'x', size: SIZES_FREE[0] }, { image: marked, marked }));
+  ok(bm instanceof AiError && bm.info.status === 404, 'buildEdit rejects malformed model names');
+  const rG = scripted([jsonRes({ images: [{ url: URL1 }] }), imgRes()]);
+  await modelscopeGenerate({ model: 'Qwen/Qwen-Image', prompt: 'x' }, {}, rG, wait);
+  ok(rG.calls[0].req.tt === undefined, 'plain generation requests carry no task type');
 }
 
 section('providers: registry / sizes / config');
 {
-  ok(PROVIDER_IDS.join() === 'cloudflare,pollinations,modelscope', 'provider ids: Cloudflare, Pollinations, ModelScope');
-  ok(!('openai' in PROVIDERS) && !('openrouter' in PROVIDERS), 'OpenAI / OpenRouter are gone');
+  ok(PROVIDER_IDS.join() === 'cloudflare,modelscope,gemini,huggingface', 'provider ids: Cloudflare, ModelScope, Gemini, Hugging Face');
+  ok(!('openai' in PROVIDERS) && !('openrouter' in PROVIDERS) && !('pollinations' in PROVIDERS), 'OpenAI / OpenRouter / Pollinations are gone');
   for (const id of PROVIDER_IDS) {
     const P = PROVIDERS[id];
-    ok(P.id === id && P.free === true && typeof P.name() === 'string' && typeof P.tag() === 'string' && typeof P.desc() === 'string' && typeof P.howto() === 'string' && typeof P.host() === 'string' && typeof P.privacy('h') === 'string' && typeof P.privacyText('h') === 'string' && P.sizes.length === 3 && typeof P.generate === 'function' && Array.isArray(P.modelPresets), 'provider interface: ' + id);
+    ok(P.id === id && P.free === true && typeof P.name() === 'string' && typeof P.tag() === 'string' && typeof P.desc() === 'string' && typeof P.howto() === 'string' && typeof P.host() === 'string' && typeof P.privacy('h') === 'string' && typeof P.privacyText('h') === 'string' && P.sizes.length === 3 && Array.isArray(P.modelPresets), 'provider interface: ' + id);
     const all = [P.name(), P.tag(), P.desc(), P.howto(), P.privacy('h'), P.privacyText('h')].join(' ');
     ok(!/openai|openrouter|gpt-image/i.test(all), 'no stale OpenAI/OpenRouter wording: ' + id);
   }
-  const { cloudflare: CF, pollinations: PL, modelscope: MS } = PROVIDERS;
-  ok(!CF.noKey && PL.noKey && !MS.noKey, 'only Pollinations works without a key');
-  ok(!CF.genOnly && PL.genOnly && MS.genOnly, 'only Cloudflare can edit with the photo');
-  ok(typeof CF.buildEdit === 'function' && typeof CF.edit === 'function' && PL.buildEdit === undefined && MS.buildEdit === undefined && PL.edit === undefined && MS.edit === undefined, 'edit builders: Cloudflare only');
-  ok(CF.extra && CF.extra.id === 'account' && PL.extra === null && MS.extra === null, 'only Cloudflare needs an account ID');
-  ok(!CF.usesMask && !PL.usesMask && !MS.usesMask && CF.maxN === 1 && !CF.hasQuality, 'no mask / variants / quality options any more');
-  ok(CF.autoModel === CF_MODELS[0] && MS.autoModel === MS_MODELS[0] && PL.autoModel === 'pollinations' && MS.modelPresets === MS_MODELS && PL.modelPresets.length === 0, 'auto models + presets');
-  ok(CF.host() === 'api.cloudflare.com' && PL.host() === 'image.pollinations.ai' && MS.host() === 'api-inference.modelscope.cn', 'provider hosts');
-  ok(/저장·개선/.test(PL.privacy('h')) && /저장·개선/.test(MS.privacy('h')) && !/저장·개선/.test(CF.privacy('h')), 'free/trial providers carry a data-use warning');
-  ok(PROVIDER_IDS.every((id) => /사진은 보내지 않아요/.test(PROVIDERS[id].privacyText('h'))) && /45초/.test(PL.privacyText('h')) && /url|주소/i.test(PL.privacyText('h')) && /알리바바/.test(MS.privacyText('h')), 'text-only privacy notes (no photo; URL logging; Alibaba download)');
+  const { cloudflare: CF, modelscope: MS, gemini: GM, huggingface: HF } = PROVIDERS;
+  ok(PROVIDER_IDS.every((id) => !PROVIDERS[id].noKey && !PROVIDERS[id].genOnly), 'every provider needs a key; none is generation-only');
+  ok(PROVIDER_IDS.every((id) => typeof PROVIDERS[id].buildEdit === 'function' && typeof PROVIDERS[id].edit === 'function'), 'every provider can edit');
+  ok(typeof CF.generate === 'function' && typeof GM.generate === 'function' && MS.generate === undefined && HF.generate === undefined && CF.canFill && GM.canFill && !MS.canFill && !HF.canFill, 'text-to-image / "fill from prompt": Cloudflare and Gemini only');
+  ok(CF.extra && CF.extra.id === 'account' && MS.extra === null && GM.extra === null && HF.extra === null, 'only Cloudflare needs an account ID');
+  ok(!CF.usesMask && !MS.usesMask && !GM.usesMask && HF.usesMask && MS.oneImage && !CF.oneImage, 'only Hugging Face uses a real mask; ModelScope takes one marked photo');
+  ok(CF.autoModel === CF_MODELS[0] && MS.autoModel === MS_MODELS[0] && GM.autoModel === GM_MODELS[0] && HF.autoModel === HF_MODEL && MS.modelPresets === MS_MODELS && GM.modelPresets === GM_MODELS && HF.modelPresets.length === 0, 'auto models + presets');
+  ok(CF.host() === 'api.cloudflare.com' && MS.host() === 'api-inference.modelscope.cn' && GM.host() === 'generativelanguage.googleapis.com' && HF.host() === 'router.huggingface.co', 'provider hosts');
+  ok(/저장·개선/.test(MS.privacy('h')) && /Google/.test(GM.privacy('h')) && /fal/.test(HF.privacy('h')) && !/저장·개선/.test(CF.privacy('h')), 'data-use warnings (trial service / Google free tier / fal via HF)');
+  ok(PROVIDER_IDS.every((id) => /h/.test(PROVIDERS[id].privacyText('h'))) && /사진은 보내지 않아요/.test(CF.privacyText('h')) && /사진은 보내지 않아요/.test(GM.privacyText('h')) && /알리바바/.test(MS.privacy('h')), 'privacy notes');
   ok(getProvider('nope') === CF && getProvider(undefined) === CF && getProvider('modelscope') === MS, 'getProvider falls back to Cloudflare');
 
   for (const s of SIZES_FREE) ok(Math.abs(s.ar - s.w / s.h) < 1e-9 && s.str === `${s.w}x${s.h}`, 'SIZES_FREE ' + s.str);
-  for (const s of SIZES_PLN) ok(s.w * s.h <= 768 * 768 && s.w % 16 === 0 && s.h % 16 === 0 && s.str === `${s.w}x${s.h}` && Math.abs(s.ar - s.w / s.h) < 1e-9, 'SIZES_PLN within 768×768 area: ' + s.str);
   for (const s of SIZES_CF) ok(s.out.w === s.w * 2 && s.out.h === s.h * 2 && s.out.w <= 1024 && s.out.h <= 1024 && s.w % 16 === 0 && s.h % 16 === 0 && s.out.w % 16 === 0 && s.out.h % 16 === 0 && Math.max(s.w, s.h) < 512, 'SIZES_CF: inputs < 512, multiples of 16, output = 2×, ≤1024: ' + s.w + 'x' + s.h);
   ok(pickSize(1.45, SIZES_CF).w === 480 && pickSize(1.45, SIZES_CF).h === 320 && pickSize(0.7, SIZES_CF).h === 480 && pickSize(1, SIZES_FREE).w === 1024, 'pickSize with provider size lists');
-  ok(pickSize(1.45, SIZES_PLN).str === '896x640' && pickSize(0.7, SIZES_PLN).str === '640x896' && pickSize(1, SIZES_PLN).str === '768x768', 'pickSize with the Pollinations classes');
   const pc = planRequest({ x0: 0.4, y0: 0.4, x1: 0.5, y1: 0.5 }, { w: 3000, h: 2000 }, { context: 0.4, sizes: SIZES_CF });
   ok(pc.size.out && pc.size.w <= 512 && pc.fit.w <= pc.size.w && Math.abs(pc.rect.w / pc.rect.h - pc.size.w / pc.size.h) < 0.03, 'planRequest honours provider sizes (cloudflare 512 input classes)');
-  const pp = planRequest({ x0: 0.4, y0: 0.4, x1: 0.5, y1: 0.5 }, { w: 3000, h: 2000 }, { context: 0.4, sizes: SIZES_PLN });
-  ok(pp.size.w * pp.size.h <= 768 * 768 && pp.fit.w <= pp.size.w && Math.abs(pp.rect.w / pp.rect.h - pp.size.w / pp.size.h) < 0.03, 'planRequest honours the Pollinations classes');
 
   // 설정 이전 / 멱등성: 삭제된 제공자의 설정·동의는 지우고 Cloudflare 설정은 지킨다
   const app = { settings: { ai: {
@@ -503,8 +535,8 @@ section('providers: registry / sizes / config');
   ok(c1.provider === 'cloudflare' && !('openai' in c1.p) && !('openrouter' in c1.p) && c1.p.cloudflare.custom === '@cf/x/y' && c1.p.cloudflare.models[0] === '@cf/x/y', 'removed providers\' settings dropped, Cloudflare settings kept');
   ok(c1.consents.cloudflare === 'api.cloudflare.com' && Object.keys(c1.consents).join() === 'cloudflare', 'removed providers\' consents dropped');
   ok(['quality', 'n', 'model', 'custom', 'resolved', 'models', 'consent', 'genProvider'].every((x) => !(x in c1)) && c1.feather === 30 && c1.tone === true && c1.translate === true && c1.ctx === 1, 'old keys removed, defaults filled');
-  const keep = aiConfig({ settings: { ai: { provider: 'pollinations', genProvider: 'modelscope', feather: 10, tone: false } } });
-  ok(keep.provider === 'pollinations' && keep.genProvider === 'modelscope' && keep.feather === 10 && keep.tone === false, 'valid choices survive');
+  const keep = aiConfig({ settings: { ai: { provider: 'gemini', genProvider: 'gemini', feather: 10, tone: false } } });
+  ok(keep.provider === 'gemini' && keep.genProvider === 'gemini' && keep.feather === 10 && keep.tone === false, 'valid choices survive');
   ok(aiConfig({ settings: {} }).provider === 'cloudflare' && aiConfig({ settings: { ai: { provider: 'nope' } } }).provider === 'cloudflare' && aiConfig({ settings: { ai: 5 } }).provider === 'cloudflare', 'fresh / unknown / corrupt settings → Cloudflare');
   const pcm = pcfg(c1, 'modelscope');
   ok(pcm.model === MODEL_AUTO && MODEL_AUTO === 'auto' && pcm.custom === '' && Array.isArray(pcm.models) && pcfg(c1, 'modelscope') === pcm, 'pcfg creates defaults once');
@@ -519,8 +551,8 @@ section('providers: model profiles / translation');
   ok(g.mode === 'generate' && g.noPhoto === true && g.usesMask === false && g.sizes === SIZES_FREE, 'profile: Cloudflare schnell = generate, no photo');
   const e1 = modelProfile('cloudflare', CF_MODELS[0]);
   ok(e1.mode === 'edit' && !e1.noPhoto && e1.sizes === SIZES_CF && !e1.usesMask, 'profile: FLUX.2 = edit with the marked image (CF sizes)');
-  const p1 = modelProfile('pollinations', 'pollinations'), m1 = modelProfile('modelscope', 'Qwen/Qwen-Image'), u1 = modelProfile('nope', 'x');
-  ok(p1.mode === 'generate' && p1.noPhoto && p1.sizes === SIZES_PLN && m1.mode === 'generate' && m1.noPhoto && m1.sizes === SIZES_FREE, 'profile: Pollinations / ModelScope are generation-only (no photo)');
+  const p1 = modelProfile('gemini', GM_MODELS[0], { mode: 'generate' }), m1 = modelProfile('modelscope', MS_MODELS[0]), u1 = modelProfile('nope', 'x'), g0 = modelProfile('gemini', GM_MODELS[0], { mode: 'edit' });
+  ok(p1.mode === 'generate' && p1.noPhoto && p1.sizes === SIZES_FREE && g0.mode === 'edit' && !g0.noPhoto && m1.mode === 'edit' && !m1.noPhoto && m1.oneImage && !m1.usesMask, 'profile: Gemini edit/generate by mode; ModelScope = edit with one marked photo');
   ok(u1.mode === 'edit' && u1.sizes === SIZES_CF, 'profile: unknown provider → Cloudflare');
   ok(/api\.cloudflare\.com/.test(PROVIDERS.cloudflare.privacyText('api.cloudflare.com')) && /사진은 보내지 않아요/.test(PROVIDERS.cloudflare.privacyText('x')), 'text-only privacy note');
 

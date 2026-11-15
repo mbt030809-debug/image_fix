@@ -25,7 +25,7 @@ export function markedCanvas(cv, selFull, size) {
 }
 
 /**
- * ed: Editor, sel: {mask, w, h} (격자 마스크, 표시 영역 기준), opts: {ctx: 0..2, feather: 0..100, provider: {sizes, usesMask, noPhoto}}
+ * ed: Editor, sel: {mask, w, h} (격자 마스크, 표시 영역 기준), opts: {ctx: 0..2, feather: 0..100, provider: {sizes, usesMask, maskKind, noPhoto, oneImage}}
  * noPhoto(문구만으로 그리는 모델): 사진을 인코딩/전송하지 않는다 — 영역 위치·크기 계산과 미리보기만 한다.
  * 반환: 요청에 필요한 모든 것 (imageBlob, maskBlob | markedBlob, size, fit, rect, …)
  */
@@ -65,6 +65,9 @@ export async function prepareRequest(ed, sel, opts) {
   let maskBlob = null, markedBlob = null;
   if (noPhoto) { /* 사진은 보내지 않는다 */ } else if (P.usesMask) {
     const maskRGBA = apiMaskRGBA(selFull, size, dil);
+    if (P.maskKind === 'white') { // 흰색 = 채울 곳, 검정 = 그대로 (불투명 흑백 마스크 — FLUX Fill 계열)
+      for (let i = 0; i < maskRGBA.length; i += 4) { const v = maskRGBA[i + 3] === 0 ? 255 : 0; maskRGBA[i] = v; maskRGBA[i + 1] = v; maskRGBA[i + 2] = v; maskRGBA[i + 3] = 255; }
+    }
     const mcv = mkCanvas(size.w, size.h);
     mcv.getContext('2d').putImageData(new ImageData(maskRGBA, size.w, size.h), 0, 0);
     maskBlob = await toBlob(mcv);

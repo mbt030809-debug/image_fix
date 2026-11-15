@@ -1,12 +1,13 @@
 // AI 제공자 레지스트리 — 제공자마다 요청 만들기 · 응답 읽기가 다르다.
-//  cloudflare   : POST /accounts/{account}/ai/run/@cf/… — Workers AI. FLUX.2 사진 편집(마스크 없음 → "표시 이미지") + FLUX.1 schnell 문구 생성. 하루 무료 한도.
-//  pollinations : GET /prompt/<문구>?width&height&seed — 키 없는 무료 클래식 API. 문구로 생성만. 한 번에 한 장 · 약 45초 간격 · 768 면적 · 작은 로고.
-//  modelscope   : POST /images/generations(비동기) → GET /tasks/{id} 폴링 → 결과 이미지 주소 내려받기 — 문구로 생성만(Qwen-Image 등). 무료 체험 토큰.
-// 사진을 보고 고치는 "편집"은 Cloudflare 만 한다. 나머지는 "문구로 채우기 / 이미지 만들기"(사진 미전송)로 쓴다.
+//  cloudflare  : POST /accounts/{account}/ai/run/@cf/… — Workers AI. FLUX.2 사진 편집(마스크 없음 → "표시 이미지") + FLUX.1 schnell 문구 생성 + 번역. 하루 무료 한도.
+//  modelscope  : POST /images/generations(비동기) → GET /tasks/{id} 폴링 → 결과 주소 내려받기 — Qwen-Image-Edit 사진 편집(표시한 사진 1장 + 문구). 무료 체험 토큰.
+//  gemini      : POST /models/<모델>:generateContent — 사진 편집(원본 + 표시 이미지) 또는 문구 생성. 사용자의 Gemini API 키.
+//  huggingface : POST /fal-ai/fal-ai/flux-lora-fill (HF Inference Providers, fal 경유) — FLUX.1 Fill [dev] 마스크 인페인팅(진짜 마스크). HF 토큰.
 // 어느 경우든 결과는 "선택 안쪽에만" 합성하므로, 모델이 다른 곳을 바꿔도 사진 나머지는 그대로다.
 import { t } from '../i18n.js';
 import { buildMultipart } from './common.js';
 import { AiError, relayRaw } from './client.js';
+import { blobToB64 } from '../bridge.js';
 
 // ------------------------------------------------------------ 바이너리 도우미 (브라우저/Node 공용)
 export function sniffType(u8) {
@@ -38,12 +39,10 @@ export async function ensureImageBlob(blob) {
 
 // ------------------------------------------------------------ 크기 클래스
 const withAr = (list) => list.map((s) => ({ ...s, ar: s.w / s.h, str: `${s.w}x${s.h}` }));
-/** 1024 안팎 (ModelScope 생성, Cloudflare 생성 모델) */
+/** 1024 안팎 (Gemini · Hugging Face FLUX.1 Fill · ModelScope Qwen-Image-Edit, Cloudflare 생성 모델) */
 export const SIZES_FREE = withAr([{ w: 1024, h: 1024 }, { w: 1152, h: 768 }, { w: 768, h: 1152 }]);
 /** Cloudflare FLUX.2: 입력 이미지는 "512×512 미만"(문서) → 480 이하로 보내고, 출력은 2배(width/height 로 지정, 16의 배수) */
 export const SIZES_CF = withAr([{ w: 480, h: 480, out: { w: 960, h: 960 } }, { w: 480, h: 320, out: { w: 960, h: 640 } }, { w: 320, h: 480, out: { w: 640, h: 960 } }]);
-/** Pollinations 클래식: 전체 면적이 768×768(589,824px) 이하여야 한다(비율 유지) */
-export const SIZES_PLN = withAr([{ w: 768, h: 768 }, { w: 896, h: 640 }, { w: 640, h: 896 }]);
 
 // ------------------------------------------------------------ 지시형 프롬프트 (마스크가 없는 모델용)
 /** 이미지 1 = 원본 크롭, 이미지 2 = 편집할 곳을 마젠타로 표시한 같은 크롭 */
@@ -70,12 +69,12 @@ export const CF_MODEL_RE = /^@cf\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-
 export const CF_GENERATE_MODELS = ['@cf/black-forest-labs/flux-1-schnell'];
 export const isCfGenerateModel = (m) => /flux-1-schnell|stable-diffusion-xl|dreamshaper|sdxl-lightning/i.test(String(m || ''));
 
-/** 모델별 동작: edit = 사진을 보고 고침(Cloudflare FLUX.2) / generate = 문구만으로 그림(선택 안쪽을 새 그림으로 채움, 사진 미전송) */
-export function modelProfile(pid, model) {
+/** (Gemini 는 pc.mode 로 edit/generate 선택, Cloudflare 는 모델로) 모델별 동작: edit = 사진을 보고 고침(Cloudflare FLUX.2) / generate = 문구만으로 그림(선택 안쪽을 새 그림으로 채움, 사진 미전송) */
+export function modelProfile(pid, model, pc) {
   const P = PROVIDERS[pid] || PROVIDERS.cloudflare;
-  if (P.genOnly) return { mode: 'generate', usesMask: false, sizes: P.sizes, noPhoto: true };
   if (pid === 'cloudflare' && isCfGenerateModel(model)) return { mode: 'generate', usesMask: false, sizes: SIZES_FREE, noPhoto: true };
-  return { mode: 'edit', usesMask: P.usesMask, sizes: P.sizes, noPhoto: false };
+  if (pid === 'gemini' && pc && pc.mode === 'generate') return { mode: 'generate', usesMask: false, sizes: P.sizes, noPhoto: true };
+  return { mode: 'edit', usesMask: !!P.usesMask, maskKind: P.maskKind || 'alpha', sizes: P.sizes, noPhoto: false, oneImage: !!P.oneImage };
 }
 
 const HANGUL = /[ᄀ-ᇿ㄰-㆏가-힯]/;
@@ -120,38 +119,29 @@ export async function parseCloudflareImage(blob, ctype) {
   return [base64ToBlob(b64, 'image/png')];
 }
 
-// ------------------------------------------------------------ Pollinations (클래식, 키 없음)
-/** 문구에서 짝이 맞지 않는 서로게이트(깨진 글자)를 없앤다 — encodeURIComponent 가 예외를 던지지 않게 */
-const wellFormed = (s) => String(s).replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '');
 
-/**
- * URL 경로에 넣을 문구: 퍼센트 인코딩(네이티브가 허용하는 문자 A-Za-z0-9%._~- 만 남도록 !'()* 도 인코딩).
- * 인코딩한 길이가 maxLen 을 넘으면 문구를 조금씩 줄인다. 빈 문구면 ''
- */
-export function encodePromptPath(text, maxLen = 1800) {
-  const enc = (s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
-  let chars = Array.from(wellFormed(String(text || '').replace(/\s+/g, ' ').trim()));
-  let out = enc(chars.join(''));
-  while (out.length > maxLen && chars.length > 1) { chars = chars.slice(0, Math.max(1, Math.floor(chars.length * 0.85))); out = enc(chars.join('')); }
-  return out;
+// ------------------------------------------------------------ 공통
+const toDataUrl = async (blob, type = 'image/png') => `data:${type};base64,${await blobToB64(blob)}`;
+/** data:image/…;base64,… → Blob (아니면 null) */
+export function dataUrlToBlob(u) {
+  const m = /^data:([A-Za-z0-9.+/-]+);base64,([A-Za-z0-9+/=\s]+)$/.exec(String(u || ''));
+  return m ? base64ToBlob(m[2], m[1]) : null;
 }
-
-/** 요청 경로: /prompt/<문구>?width=&height=&seed= */
-export function pollinationsPath(prompt, size, seed) {
-  const s = size || SIZES_PLN[0];
-  return `/prompt/${encodePromptPath(prompt)}?width=${s.w}&height=${s.h}&seed=${Math.abs(Math.floor(Number(seed) || 0)) % 2147483647}`;
+/** 사진 1장만 받는 모델용 지시: 표시된 곳만 바꾸라고 한다 */
+export function instructOne(prompt) {
+  const u = String(prompt || '').trim().slice(0, 1500);
+  return 'You are a precise photo editor.\n'
+    + 'The image has one area highlighted in magenta (tinted, with an outline). Change ONLY that highlighted area as requested below. Keep everything else exactly the same: same framing, composition, lighting, colors and aspect ratio. '
+    + 'Return the complete edited image with no magenta highlight or outline.\n'
+    + `Request: ${u}`;
 }
-
-/** 한도(402/429) → 쉬운 오류. 그 밖은 그대로 */
-function pollinationsError(e) {
-  if (e instanceof AiError && e.info && (e.info.status === 402 || e.info.status === 429)) return new AiError({ status: e.info.status, code: 'rate_free', message: e.info.message });
-  return e;
-}
+const parseJsonBlob = async (blob) => { try { return JSON.parse(await blob.text()); } catch (e) { throw new AiError({ code: 'bad_response', status: 200, message: 'not json' }); } };
 
 // ------------------------------------------------------------ ModelScope API-Inference (비동기 작업)
-export const MS_MODELS = ['Qwen/Qwen-Image', 'Tongyi-MAI/Z-Image-Turbo', 'black-forest-labs/FLUX.1-Krea-dev'];
+export const MS_MODELS = ['Qwen/Qwen-Image-Edit', 'Qwen/Qwen-Image-Edit-2509'];
 export const MS_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,60}\/[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 const MS_TASK_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{5,79}$/;
+export const MS_EDIT_TASK = 'image-to-image-generation';
 
 /** 작업 조회 응답 → {state: 'done'|'failed'|'pending', images: [https 주소…], message} */
 export function parseModelScopeTask(json) {
@@ -175,17 +165,21 @@ export const sleepAbortable = (ms, signal) => new Promise((resolve, reject) => {
 
 async function relayJson(provider, req, opts, relay) {
   const { blob } = await relay(provider, req, opts);
-  try { return JSON.parse(await blob.text()); } catch (e) { throw new AiError({ code: 'bad_response', status: 200, message: 'not json' }); }
+  return parseJsonBlob(blob);
 }
 
 /**
- * 문구로 이미지 만들기: 작업 만들기(POST) → 끝날 때까지 상태 확인(GET, 3~4초 간격, 최대 pollTimeoutMs) → 결과 이미지 주소 내려받기.
- * o: {model, prompt, size}, opts: {signal, onPhase, pollTimeoutMs}. relay/wait 는 테스트용.
+ * 작업 만들기(POST) → 끝날 때까지 상태 확인(GET, 3~4초 간격, 최대 pollTimeoutMs) → 결과 이미지 주소 내려받기.
+ * o: {model, prompt, size?, image?(data URI — 있으면 편집: 작업 종류 image-to-image-generation)}, opts: {signal, onPhase, pollTimeoutMs}. relay/wait 는 테스트용.
  */
 export async function modelscopeGenerate(o, opts = {}, relay = relayRaw, wait = sleepAbortable) {
   if (!MS_MODEL_RE.test(String(o.model || ''))) throw new AiError({ status: 404, code: 'model_not_found', message: 'invalid model name' });
-  const body = new Blob([JSON.stringify({ model: o.model, prompt: String(o.prompt || '').slice(0, 2000), size: (o.size && o.size.str) || '1024x1024' })], { type: 'application/json' });
-  const sub = await relayJson('modelscope', { method: 'POST', path: '/images/generations', contentType: 'application/json', body }, opts, relay);
+  const payload = { model: o.model, prompt: String(o.prompt || '').slice(0, 2000) };
+  if (o.image) { payload.image_url = o.image; payload.image = o.image; } // 공개 주소만 받는 경우를 대비해 두 필드 모두(예제 코드가 둘 다 쓴다)
+  else payload.size = (o.size && o.size.str) || '1024x1024';
+  const tt = o.image ? MS_EDIT_TASK : undefined;
+  const body = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+  const sub = await relayJson('modelscope', { method: 'POST', path: '/images/generations', contentType: 'application/json', body, tt }, opts, relay);
   let url = sub && Array.isArray(sub.images) && sub.images[0] && typeof sub.images[0].url === 'string' ? sub.images[0].url : '';
   if (!url) {
     const taskId = sub && (sub.task_id || sub.taskId);
@@ -193,7 +187,7 @@ export async function modelscopeGenerate(o, opts = {}, relay = relayRaw, wait = 
     const t0 = Date.now(), limit = opts.pollTimeoutMs || 300000;
     for (let i = 0; !url; i++) {
       await wait(i === 0 ? 3000 : 4000, opts.signal);
-      const r = parseModelScopeTask(await relayJson('modelscope', { method: 'GET', path: `/tasks/${taskId}` }, opts, relay));
+      const r = parseModelScopeTask(await relayJson('modelscope', { method: 'GET', path: `/tasks/${taskId}`, tt }, opts, relay));
       if (r.state === 'failed') throw new AiError({ code: 'task_failed', status: 200, message: r.message });
       if (r.state === 'done') {
         if (!r.images.length) throw new AiError({ code: 'no_image', status: 200 });
@@ -206,16 +200,61 @@ export async function modelscopeGenerate(o, opts = {}, relay = relayRaw, wait = 
   return [await ensureImageBlob(blob)];
 }
 
+// ------------------------------------------------------------ Gemini (generateContent)
+export const GM_MODELS = ['gemini-2.5-flash-image', 'gemini-3-pro-image-preview'];
+export const GM_MODEL_RE = /^gemini-[A-Za-z0-9][A-Za-z0-9._-]{0,50}$/;
+const aspectOf = (size) => { const a = (size && size.ar) || 1; return a > 1.2 ? '3:2' : a < 0.83 ? '2:3' : '1:1'; };
+
+/** generateContent 응답 → {b64, type} 또는 {b64:'', reason, blocked} (이미지 없이 글만 왔거나 안전 정책으로 막힘) */
+export function parseGeminiImage(json) {
+  const parts = [];
+  for (const c of (json && Array.isArray(json.candidates) ? json.candidates : [])) for (const p of (c && c.content && Array.isArray(c.content.parts) ? c.content.parts : [])) parts.push(p);
+  const img = parts.map((p) => p && (p.inlineData || p.inline_data)).find((d) => d && typeof d.data === 'string' && d.data);
+  if (img) return { b64: img.data, type: img.mimeType || img.mime_type || 'image/png' };
+  const text = parts.map((p) => (p && typeof p.text === 'string' ? p.text : '')).join(' ').replace(/\s+/g, ' ').trim();
+  const block = json && json.promptFeedback && json.promptFeedback.blockReason;
+  const fin = json && Array.isArray(json.candidates) && json.candidates[0] && json.candidates[0].finishReason;
+  const blocked = !!block || /SAFETY|PROHIBITED|BLOCK/i.test(String(fin || ''));
+  return { b64: '', blocked, reason: (block ? `blocked: ${block}` : (text || (fin && fin !== 'STOP' ? String(fin) : ''))).slice(0, 120) };
+}
+async function geminiImage(blob) {
+  const r = parseGeminiImage(await parseJsonBlob(blob));
+  if (!r.b64) throw new AiError({ code: r.blocked ? 'moderation_blocked' : 'no_image', status: 200, message: r.reason });
+  return [await ensureImageBlob(base64ToBlob(r.b64, r.type))];
+}
+const gmPath = (model) => {
+  if (!GM_MODEL_RE.test(String(model || ''))) throw new AiError({ status: 404, code: 'model_not_found', message: 'invalid model name' });
+  return `/models/${model}:generateContent`;
+};
+export function parseGeminiModels(json) {
+  const arr = json && Array.isArray(json.models) ? json.models : [];
+  return arr.map((m) => String((m && m.name) || '').replace(/^models\//, '')).filter((n) => GM_MODEL_RE.test(n) && /image/i.test(n));
+}
+
+// ------------------------------------------------------------ Hugging Face · FLUX.1 Fill [dev] (fal 경유)
+export const HF_MODEL = 'black-forest-labs/FLUX.1-Fill-dev';
+/** fal 응답 {images:[{url}]} 또는 {image:{url}} → 이미지 Blob (data URI 이거나 fal 주소) */
+export async function parseFalImage(json, relay, opts) {
+  const first = json && ((Array.isArray(json.images) && json.images[0]) || json.image);
+  const u = first && (typeof first === 'string' ? first : first.url);
+  if (typeof u !== 'string' || !u) throw new AiError({ code: 'no_image', status: 200, message: '' });
+  if (u.startsWith('data:')) { const b = dataUrlToBlob(u); if (!b) throw new AiError({ code: 'no_image', status: 200, message: '' }); return ensureImageBlob(b); }
+  if (opts && opts.onPhase) opts.onPhase('download');
+  const { blob } = await relay('huggingface', { method: 'GET', url: u }, opts);
+  return ensureImageBlob(blob);
+}
+
 // ------------------------------------------------------------ 레지스트리
 const COMMON_PRIVACY = () => t('전체 사진은 보내지 않아요.', 'The full photo is not sent.');
 const FREE_PRIVACY = () => t('무료/체험 서비스는 제공사 정책에 따라 보낸 내용이 저장·개선에 쓰일 수 있어요. 민감한 문구나 사진은 피해 주세요.', 'Free/trial services may store or use submitted content under the provider\'s policy. Avoid sensitive prompts or photos.');
+const PHOTO_SENT = (host) => t(`선택한 영역과 그 주변 이미지, 입력한 문구가 ${host} 로 전송돼요. ${COMMON_PRIVACY()}`, `The selected area with its surroundings and your prompt are sent to ${host}. ${COMMON_PRIVACY()}`);
 
 export const PROVIDERS = {
   cloudflare: {
-    id: 'cloudflare', short: 'Cloudflare', free: true, noKey: false, genOnly: false, usesMask: false, maxN: 1, hasQuality: false, sizes: SIZES_CF,
+    id: 'cloudflare', short: 'Cloudflare', free: true, noKey: false, genOnly: false, usesMask: false, maxN: 1, hasQuality: false, sizes: SIZES_CF, canFill: true,
     name: () => t('Cloudflare Workers AI (하루 무료)', 'Cloudflare Workers AI (daily free)'),
     tag: () => t('하루 무료', 'Daily free'),
-    desc: () => t('FLUX.2 이미지 편집 모델을 무료 계정의 하루 무료 한도 안에서 써요(카드 불필요). 사진을 보고 고치는 "편집"은 이 제공자만 할 수 있어요. 문구로 새로 그리는 FLUX.1 schnell 과 한국어 → 영어 번역에도 써요.', 'Uses FLUX.2 image-editing models within the free daily allowance of a free account (no card). Editing with the photo is only available here. Also powers FLUX.1 schnell text-to-image and Korean → English translation.'),
+    desc: () => t('FLUX.2 이미지 편집 모델을 무료 계정의 하루 무료 한도 안에서 써요(카드 불필요). 문구로 새로 그리는 FLUX.1 schnell 과 한국어 → 영어 번역에도 써요.', 'Uses FLUX.2 image-editing models within the free daily allowance of a free account (no card). Also powers FLUX.1 schnell text-to-image and Korean → English translation.'),
     howto: () => t('dash.cloudflare.com 에 무료로 가입한 뒤, 계정 ID(대시보드 주소의 32자리 값)와 API 토큰(My Profile → API Tokens → Create Token → “Workers AI” 템플릿)을 입력해요.', 'Sign up free at dash.cloudflare.com, then enter your account ID (the 32-character value in the dashboard URL) and an API token (My Profile → API Tokens → Create Token → "Workers AI" template).'),
     host: () => 'api.cloudflare.com',
     privacy: (host) => t(`선택한 영역과 그 주변 이미지, 입력한 문구가 ${host}(Workers AI) 로 전송돼요. ${COMMON_PRIVACY()} 하루 무료 한도를 넘으면 요청이 거부돼요.`, `The selected area with its surroundings and your prompt are sent to ${host} (Workers AI). ${COMMON_PRIVACY()} Requests are refused once the daily free allowance is used up.`),
@@ -254,46 +293,85 @@ export const PROVIDERS = {
     privacyText: (host) => t(`입력한 문구(한국어는 영어로 번역해 보낼 수 있어요)가 ${host}(Workers AI) 로 전송돼요. 사진은 보내지 않아요. 하루 무료 한도를 넘으면 요청이 거부돼요.`, `Your prompt (Korean can be translated to English first) is sent to ${host} (Workers AI). No photo is sent. Requests are refused once the daily free allowance is used up.`),
   },
 
-  pollinations: {
-    id: 'pollinations', short: 'Pollinations', free: true, noKey: true, genOnly: true, usesMask: false, maxN: 1, hasQuality: false, sizes: SIZES_PLN,
-    name: () => t('Pollinations.ai (키 없이 무료)', 'Pollinations.ai (free, no key)'),
-    tag: () => t('키 없이 무료', 'Free, no key'),
-    desc: () => t('가입도 키도 필요 없어요. 문구로 이미지를 만들어요(사진 편집은 못 해요 — "문구로 채우기"·"이미지 만들기"에 써요). 한 번에 한 장, 약 45초 간격으로만 만들 수 있고 결과에 작은 로고가 붙을 수 있어요. 영어 문구가 가장 잘 그려져요.', 'No signup or key needed. Creates images from a prompt (no photo editing — use it for "Fill from prompt" and "Create image"). One image at a time, about 45 seconds apart, and results may carry a small logo. English prompts work best.'),
-    howto: () => t('설정할 것이 없어요. 문구가 주소(URL)에 담겨 전송되니 개인 정보는 적지 마세요.', 'Nothing to set up. Your prompt travels inside the URL, so do not write personal details.'),
-    host: () => 'image.pollinations.ai',
-    privacy: (host) => t(`입력한 문구가 ${host} 로 전송돼요(주소에 포함돼 서버 기록에 남을 수 있어요). 사진은 보내지 않아요. ${FREE_PRIVACY()}`, `Your prompt is sent to ${host} (inside the URL, so it may appear in server logs). No photo is sent. ${FREE_PRIVACY()}`),
-    extra: null, modelPresets: [], fallbackModel: 'pollinations', autoModel: 'pollinations',
-    /** 문구만으로 새 이미지 (GET /prompt/<문구>) → Blob[] */
-    async generate(o, opts, relay = relayRaw) {
-      const path = pollinationsPath(o.prompt, o.size, Math.floor(Math.random() * 2147483646));
-      if (path.startsWith('/prompt/?')) throw new AiError({ code: 'no_image', status: 200, message: 'empty prompt' });
-      try {
-        const { blob } = await relay('pollinations', { method: 'GET', path }, opts);
-        return [await ensureImageBlob(blob)];
-      } catch (e) { throw pollinationsError(e); }
-    },
-    privacyText: (host) => t(`입력한 문구가 ${host} 로 전송돼요(주소에 포함돼 서버 기록에 남을 수 있어요). 사진은 보내지 않아요. 무료 서비스는 보낸 내용이 저장·공개될 수 있으니 민감한 문구는 피해 주세요. 한 번에 한 장, 약 45초 간격으로만 만들 수 있어요.`, `Your prompt is sent to ${host} (inside the URL, so it may appear in server logs). No photo is sent. Free services may store or publish submitted content, so avoid sensitive prompts. One image at a time, about 45 seconds apart.`),
-  },
-
   modelscope: {
-    id: 'modelscope', short: 'ModelScope', free: true, noKey: false, genOnly: true, usesMask: false, maxN: 1, hasQuality: false, sizes: SIZES_FREE,
-    name: () => t('ModelScope API-Inference (무료 체험)', 'ModelScope API-Inference (free trial)'),
-    tag: () => t('무료 체험', 'Free trial'),
-    desc: () => t('Alibaba ModelScope(魔搭)의 Qwen-Image 같은 이미지 모델을 무료 체험 한도로 써요. 문구로 이미지를 만들어요(사진 편집은 못 해요 — "문구로 채우기"·"이미지 만들기"에 써요). 만드는 데 보통 10~60초 걸려요.', 'Uses image models such as Qwen-Image from Alibaba ModelScope within the free trial allowance. Creates images from a prompt (no photo editing — use it for "Fill from prompt" and "Create image"). Usually takes 10–60 seconds.'),
+    id: 'modelscope', short: 'ModelScope', free: true, noKey: false, genOnly: false, usesMask: false, oneImage: true, maxN: 1, hasQuality: false, sizes: SIZES_FREE,
+    name: () => t('ModelScope · Qwen-Image-Edit (무료 체험)', 'ModelScope · Qwen-Image-Edit (free trial)'),
+    tag: () => t('Qwen 편집 · 체험', 'Qwen edit · trial'),
+    desc: () => t('Alibaba ModelScope(魔搭)의 Qwen-Image-Edit 로 사진을 고쳐요. 편집할 곳을 마젠타로 표시한 사진 1장과 문구를 보내요. 보통 10~60초 걸려요. (요청 형식은 공개 예제 기준이라 서버가 거부할 수 있어요 — 그 사유를 그대로 보여 줘요.)', 'Edits photos with Qwen-Image-Edit from Alibaba ModelScope. Sends one photo with the edit area marked in magenta plus your prompt. Usually takes 10–60 seconds. (The request format follows public examples, so the server may refuse it — the reason is shown as-is.)'),
     howto: () => t('modelscope.cn 에 가입하고 알리바바 클라우드 계정 인증을 마친 뒤, 계정 설정의 "액세스 토큰"에서 토큰을 만들어 붙여 넣어요. 무료 사용량은 모델·시기에 따라 달라요.', 'Sign up at modelscope.cn, finish the Alibaba Cloud account verification, then create a token under "Access tokens" in your account settings and paste it. The free allowance varies by model and time.'),
     host: () => 'api-inference.modelscope.cn',
-    privacy: (host) => t(`입력한 문구가 ${host} 로 전송돼요. 만든 이미지는 알리바바 클라우드의 주소에서 내려받아요. 사진은 보내지 않아요. ${FREE_PRIVACY()}`, `Your prompt is sent to ${host}. The created image is downloaded from an Alibaba Cloud address. No photo is sent. ${FREE_PRIVACY()}`),
+    privacy: (host) => t(`표시를 넣은 선택 영역과 주변 이미지 1장(데이터 주소로 포함)과 입력한 문구가 ${host} 로 전송돼요. 만든 이미지는 알리바바 클라우드의 주소에서 내려받아요. ${COMMON_PRIVACY()} ${FREE_PRIVACY()}`, `One image of the selected area with its surroundings (marked in magenta, embedded as a data URL) and your prompt are sent to ${host}. The result is downloaded from an Alibaba Cloud address. ${COMMON_PRIVACY()} ${FREE_PRIVACY()}`),
     extra: null, modelPresets: MS_MODELS, fallbackModel: MS_MODELS[0], autoModel: MS_MODELS[0],
     async test(info, opts) {
       try { await relayRaw('modelscope', { method: 'GET', path: '/models' }, opts); } catch (e) {
-        if (e instanceof AiError && e.info && e.info.status === 404) return { kind: 'warn', text: t('토큰 확인용 주소를 찾지 못했어요. 이미지를 한 번 만들어 확인해 보세요.', 'Could not find the token-check address. Create one image to verify.') };
+        if (e instanceof AiError && e.info && e.info.status === 404) return { kind: 'warn', text: t('토큰 확인용 주소를 찾지 못했어요. 한 번 편집해 보며 확인해 주세요.', 'Could not find the token-check address. Try one edit to verify.') };
         throw e;
       }
       return { kind: 'ok', text: t('연결됐어요(토큰 확인). 사용할 모델: ', 'Connected (token verified). Model: ') + MS_MODELS[0], d: { list: MS_MODELS.slice(), best: MS_MODELS[0], free: [] } };
     },
-    /** 문구만으로 새 이미지 (비동기 작업) → Blob[] */
-    async generate(o, opts, relay = relayRaw) { return modelscopeGenerate(o, opts, relay); },
-    privacyText: (host) => t(`입력한 문구가 ${host} 로 전송돼요. 만든 이미지는 알리바바 클라우드의 주소에서 내려받아요. 사진은 보내지 않아요. 무료/체험 서비스는 보낸 내용이 저장·개선에 쓰일 수 있어요.`, `Your prompt is sent to ${host}. The created image is downloaded from an Alibaba Cloud address. No photo is sent. Free/trial services may store or use submitted content.`),
+    /** 표시한 사진 1장 + 문구 → 편집 요청 정보(작업 만들기 본문은 edit 에서 만든다) */
+    async buildEdit(o, imgs) {
+      if (!MS_MODEL_RE.test(String(o.model || ''))) throw new AiError({ status: 404, code: 'model_not_found', message: 'invalid model name' });
+      return { model: o.model, prompt: instructOne(o.prompt), image: await toDataUrl(imgs.marked) };
+    },
+    async edit(req, opts, relay = relayRaw) { return modelscopeGenerate(req, opts, relay); },
+    privacyText: (host) => t(`입력한 문구가 ${host} 로 전송돼요.`, `Your prompt is sent to ${host}.`),
+  },
+
+  gemini: {
+    id: 'gemini', short: 'Gemini', free: true, noKey: false, genOnly: false, usesMask: false, maxN: 1, hasQuality: false, sizes: SIZES_FREE, canFill: true,
+    name: () => t('Google Gemini (이미지 모델)', 'Google Gemini (image model)'),
+    tag: () => t('내 API 키', 'Your API key'),
+    desc: () => t('Gemini 이미지 모델(기본 gemini-2.5-flash-image, 일명 “나노 바나나”)로 사진을 고치거나 문구로 그려요. 내 Gemini API 키가 필요하고, 이미지 모델의 무료 한도는 계정·시기에 따라 달라요(없을 수도 있어요).', 'Edits photos or paints from a prompt with Gemini image models (default gemini-2.5-flash-image, a.k.a. "Nano Banana"). Needs your Gemini API key; the free allowance for image models depends on the account and time (it may be none).'),
+    howto: () => t('aistudio.google.com 에서 “Get API key” 로 키(AIza…)를 만들어 붙여 넣어요. 무료 키로는 이미지 모델이 한도 0 으로 거부될 수 있어요(결제 설정 필요).', 'Create a key (AIza…) with "Get API key" at aistudio.google.com and paste it. A free key may be refused for image models with a zero quota (billing may be required).'),
+    host: () => 'generativelanguage.googleapis.com',
+    privacy: (host) => t(`${PHOTO_SENT(host)} 무료 사용 시 Google 이 보낸 내용을 제품 개선에 쓸 수 있어요.`, `${PHOTO_SENT(host)} On the free tier Google may use submitted content to improve its products.`),
+    extra: null, modelPresets: GM_MODELS, fallbackModel: GM_MODELS[0], autoModel: GM_MODELS[0],
+    async test(info, opts) {
+      const { blob } = await relayRaw('gemini', { method: 'GET', path: '/models?pageSize=100' }, opts);
+      let names = [];
+      try { names = parseGeminiModels(JSON.parse(await blob.text())); } catch (e) { /* 목록을 못 읽어도 키는 맞다 */ }
+      const list = names.length ? names : GM_MODELS.slice();
+      return { kind: 'ok', text: t('연결됐어요(키 확인). 이미지 모델: ', 'Connected (key verified). Image models: ') + list.slice(0, 5).join(', '), d: { list, best: list[0], free: [] } };
+    },
+    /** 원본 크롭 + 표시한 크롭 + 지시문 → generateContent 본문 */
+    async buildEdit(o, imgs) {
+      const parts = [{ text: instruct(o.prompt) }, { inlineData: { mimeType: 'image/png', data: await blobToB64(imgs.image) } }, { inlineData: { mimeType: 'image/png', data: await blobToB64(imgs.marked) } }];
+      const body = new Blob([JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { responseModalities: ['TEXT', 'IMAGE'] } })], { type: 'application/json' });
+      return { method: 'POST', path: gmPath(o.model), contentType: 'application/json', body };
+    },
+    async edit(req, opts, relay = relayRaw) { const { blob } = await relay('gemini', req, opts); return geminiImage(blob); },
+    /** 문구만으로 그리기 → Blob[] (사진 미전송). 비율은 가로/세로/정사각 중 가까운 것 */
+    async generate(o, opts, relay = relayRaw) {
+      const cfg = { responseModalities: ['TEXT', 'IMAGE'] };
+      const ar = aspectOf(o.size);
+      if (ar !== '1:1') cfg.imageConfig = { aspectRatio: ar };
+      const body = new Blob([JSON.stringify({ contents: [{ role: 'user', parts: [{ text: String(o.prompt || '').slice(0, 2000) }] }], generationConfig: cfg })], { type: 'application/json' });
+      const { blob } = await relay('gemini', { method: 'POST', path: gmPath(o.model), contentType: 'application/json', body }, opts);
+      return geminiImage(blob);
+    },
+    privacyText: (host) => t(`입력한 문구가 ${host} 로 전송돼요. 사진은 보내지 않아요. 무료 사용 시 Google 이 보낸 내용을 제품 개선에 쓸 수 있어요.`, `Your prompt is sent to ${host}. No photo is sent. On the free tier Google may use submitted content to improve its products.`),
+  },
+
+  huggingface: {
+    id: 'huggingface', short: 'Hugging Face', free: false, noKey: false, genOnly: false, usesMask: true, maskKind: 'white', maxN: 1, hasQuality: false, sizes: SIZES_FREE,
+    name: () => t('Hugging Face · FLUX.1 Fill [dev] (마스크 인페인팅)', 'Hugging Face · FLUX.1 Fill [dev] (mask inpainting)'),
+    tag: () => t('진짜 마스크', 'Real mask'),
+    desc: () => t('FLUX.1 Fill [dev] 는 선택 영역(마스크) 안쪽만 새로 그리는 인페인팅 전용 모델이에요. 선택 안쪽에 들어갈 “내용”을 영어로 설명하면 가장 잘 돼요(예: a clear blue sky). Hugging Face Inference Providers(fal 경유)로 호출해요 — 무료 한도·제공 여부는 확인하지 못했어요. 비상업 라이선스 모델이에요.', 'FLUX.1 Fill [dev] is an inpainting-only model that repaints just inside your selection (the mask). Describe what should appear there, in English (e.g. a clear blue sky). Called through Hugging Face Inference Providers (via fal) — free allowance and availability are unverified. Non-commercial license.'),
+    howto: () => t('huggingface.co 에서 토큰(hf_…, Inference Providers 호출 권한)을 만들고, FLUX.1-Fill-dev 모델 페이지에서 약관에 동의(Access repository)해 둬야 해요. 사용량은 Hugging Face 계정에 청구될 수 있어요.', 'Create a token (hf_…, with permission to call Inference Providers) at huggingface.co and accept the terms on the FLUX.1-Fill-dev model page (Access repository). Usage may be billed to your Hugging Face account.'),
+    host: () => 'router.huggingface.co',
+    privacy: (host) => t(`선택 영역과 주변 이미지, 마스크, 입력한 문구가 ${host}(Hugging Face → fal.ai)로 전송돼요. ${COMMON_PRIVACY()} 사용량은 계정에 청구될 수 있어요. 결과 이미지는 fal 주소에서 받을 수 있어요.`, `The selected area with its surroundings, the mask and your prompt are sent to ${host} (Hugging Face → fal.ai). ${COMMON_PRIVACY()} Usage may be billed to your account. The result may be downloaded from a fal address.`),
+    extra: null, modelPresets: [], fallbackModel: HF_MODEL, autoModel: HF_MODEL,
+    /** 원본 크롭 + 마스크(흰색 = 채울 곳) + 문구 → fal flux-lora-fill 본문 (결과는 data URI 로 받는다) */
+    async buildEdit(o, imgs) {
+      const payload = { prompt: String(o.prompt || '').trim().slice(0, 1500), image_url: await toDataUrl(imgs.image), mask_url: await toDataUrl(imgs.mask), sync_mode: true, output_format: 'png', num_inference_steps: 28, guidance_scale: 30 };
+      return { method: 'POST', path: '/fal-ai/fal-ai/flux-lora-fill', contentType: 'application/json', body: new Blob([JSON.stringify(payload)], { type: 'application/json' }) };
+    },
+    async edit(req, opts, relay = relayRaw) {
+      const { blob } = await relay('huggingface', req, opts);
+      return [await parseFalImage(await parseJsonBlob(blob), relay, opts)];
+    },
+    privacyText: (host) => t(`입력한 문구가 ${host} 로 전송돼요.`, `Your prompt is sent to ${host}.`),
   },
 };
 

@@ -1,5 +1,5 @@
 // AI 영역 수정: 올가미/브러시/사각형/원형으로 영역을 고르고, 그 영역(+주변)만 AI 에 요청한다.
-//  - Cloudflare: 사진을 보고 고친다(편집) 또는 문구만으로 채운다  - Pollinations · ModelScope: 문구로 채우기(사진 미전송)
+//  - Cloudflare · Gemini: 사진을 보고 고친다(편집) 또는 문구만으로 채운다  - ModelScope(Qwen-Image-Edit): 표시한 사진 1장으로 편집  - Hugging Face(FLUX.1 Fill): 진짜 마스크로 인페인팅
 // 결과는 "선택 안쪽만 보이는" 이미지 레이어로 합성돼 비파괴(숨기기·삭제·실행 취소)로 남는다.
 import { h, icon, rafThrottle } from '../ui/dom.js';
 import { t } from '../i18n.js';
@@ -233,25 +233,24 @@ export function open(ed, body) {
     promptEl.value = S.prompt;
     promptEl.addEventListener('input', () => { S.prompt = promptEl.value; });
     const P = prov();
-    const M = modelProfile(P.id, currentModel(P));
-    const list = M.mode === 'generate' ? GEN_PRESETS : PRESETS;
+    const M = modelProfile(P.id, currentModel(P), pcfg(cfg, P.id));
+    const list = (M.mode === 'generate' || P.id === 'huggingface') ? GEN_PRESETS : PRESETS; // FLUX Fill 은 "채울 내용"을 설명한다
     const presets = Chips({ label: t('예시 문구', 'Examples'), items: list.map((p) => ({ id: p.id, label: t(p.ko, p.en) })), onSelect: (id) => { const p = list.find((x) => x.id === id); S.prompt = t(p.pko, p.pen); promptEl.value = S.prompt; promptEl.focus(); } });
     const ctx = Segmented({ label: t('주변 포함', 'Context'), items: [{ id: '0', label: t('좁게', 'Tight') }, { id: '1', label: t('보통', 'Normal') }, { id: '2', label: t('넓게', 'Wide') }], value: String(cfg.ctx), onChange: (v) => { cfg.ctx = +v; save(); } });
     const openSet = (pid) => openAiSettings(ed.app, { provider: pid, onClose: renderBody });
     if (S.msg) body.append(...[h('p', { class: 'ai-msg err', role: 'alert' }, S.msg.text), S.msg.settings ? Btn(t('AI 설정 열기', 'Open AI settings'), 'tonal', () => openSet(P.id), 'key-round') : null].filter(Boolean)); // (null 을 그대로 append 하면 글자 "null" 이 붙는다)
     if (bridge.ai.available() && !providerReady(P.id)) {
       body.append(h('div', { class: 'ai-setup' }, note(t(`${P.short} 키를 설정하면 바로 쓸 수 있어요.`, `Set up your ${P.short} key to use it.`)),
-        h('div', { class: 'row wrap' }, Btn(t('키 설정', 'Set up key'), 'tonal', () => openSet(P.id), 'key-round'),
-          Btn(t('키 없이 쓰기: Pollinations', 'No key: Pollinations'), 'outlined', () => { cfg.provider = 'pollinations'; save(); renderBody(); }, 'wand-sparkles'))));
+        h('div', { class: 'row wrap' }, Btn(t('키 설정', 'Set up key'), 'tonal', () => openSet(P.id), 'key-round'))));
     }
     body.append(h('div', { class: 'row wrap', style: { justifyContent: 'space-between' } }, h('span', { class: 'sheet-note' }, t('제공자: ', 'Provider: ') + P.short + ' · ' + P.tag()), Btn(t('바꾸기', 'Change'), 'text', () => openSet(P.id))));
-    if (P.id === 'pollinations') body.append(note(t('Pollinations 는 한 번에 한 장, 약 45초 간격으로만 만들 수 있어요. 결과에 작은 로고가 붙을 수 있어요.', 'Pollinations makes one image at a time, about 45 seconds apart. Results may carry a small logo.')));
-    if (P.genOnly) body.append(note(t('이 제공자는 사진을 보지 못하고 문구만으로 그려요. 선택 안쪽에 들어갈 내용을 설명해 주세요(예: 맑은 하늘, 잔디밭). 영어 문구가 가장 잘 그려져요. 사진은 전송되지 않아요.', 'This provider never sees your photo: it paints from the prompt alone. Describe what should appear inside the selection (e.g. clear sky, grass). English prompts work best. No photo is sent.')));
-    if (P.id === 'cloudflare') {
+    if (P.canFill) { // Cloudflare(모델로) · Gemini(설정 mode 로): 사진 보고 편집 / 문구로 채우기
       body.append(Segmented({ label: t('방식', 'Mode'), items: [{ id: 'edit', label: t('사진 보고 편집', 'Edit with photo') }, { id: 'generate', label: t('문구로 채우기', 'Fill from prompt') }], value: M.mode,
-        onChange: (v) => { const pc = pcfg(cfg, 'cloudflare'); if (v === 'generate') { pc.model = P.generateModel; pc.custom = P.generateModel; } else { pc.model = MODEL_AUTO; } save(); renderBody(); } }).el);
-      if (M.mode === 'generate') body.append(note(t('이 방식은 사진을 보지 않고 문구만으로 그려요. 선택 안쪽에 들어갈 내용을 설명해 주세요(예: 맑은 하늘, 잔디밭). 한국어는 영어로 번역해서 보내요. 사진은 전송되지 않아요.', 'This mode never sees your photo: it paints from the prompt alone. Describe what should appear inside the selection (e.g. clear sky, grass). Korean is translated to English first. No photo is sent.')));
+        onChange: (v) => { const pc = pcfg(cfg, P.id); if (P.id === 'cloudflare') { if (v === 'generate') { pc.model = P.generateModel; pc.custom = P.generateModel; } else { pc.model = MODEL_AUTO; } } else pc.mode = v; save(); renderBody(); } }).el);
+      if (M.mode === 'generate') body.append(note(t(`이 방식은 사진을 보지 않고 문구만으로 그려요. 선택 안쪽에 들어갈 내용을 설명해 주세요(예: 맑은 하늘, 잔디밭). ${P.id === 'cloudflare' ? '한국어는 영어로 번역해서 보내요. ' : ''}사진은 전송되지 않아요.`, `This mode never sees your photo: it paints from the prompt alone. Describe what should appear inside the selection (e.g. clear sky, grass). ${P.id === 'cloudflare' ? 'Korean is translated to English first. ' : ''}No photo is sent.`)));
     }
+    if (P.id === 'huggingface') body.append(note(t('FLUX.1 Fill 은 선택(마스크) 안쪽만 새로 그리는 모델이에요. “무엇으로 채울지”를 영어로 적어 주세요(예: a clear blue sky). “셔츠를 파랗게” 같은 고치기 지시는 잘 안 맞아요. 비상업 라이선스 모델이에요.', 'FLUX.1 Fill repaints only inside the selection (mask). Say what should fill it, in English (e.g. a clear blue sky). Edit instructions like "make the shirt blue" fit it poorly. Non-commercial license.')));
+    if (P.id === 'modelscope') body.append(note(t('편집할 곳을 마젠타로 표시한 사진 1장과 문구를 보내요(Qwen-Image-Edit). 요청 형식은 공개 예제 기준이라 서버가 거부하면 그 사유가 그대로 보여요.', 'Sends one photo with the edit area marked in magenta plus your prompt (Qwen-Image-Edit). The format follows public examples; if the server refuses it, its reason is shown as-is.')));
     body.append(promptEl, presets.el);
     body.append(sec(t('주변 포함 (넓을수록 어울리게 만들지만 결과가 덜 선명할 수 있어요)', 'Context (wider blends better but may look softer)')), ctx.el,
       note(M.mode === 'generate' ? t('결과는 선택 안쪽에만 합쳐져요. 사진과 무관하게 그려서 밝기·색이 어긋날 수 있어요. 마음에 안 들면 “다시 생성”을 눌러 보세요.', 'The result is blended only inside your selection. It is painted without seeing the photo, so lighting may not match; try "Regenerate".')
@@ -353,7 +352,7 @@ export function open(ed, body) {
     const P = prov();
     if (!providerReady(P.id)) { S.tab = 'ask'; renderBody(); openAiSettings(ed.app, { provider: P.id, onClose: renderBody }); return; }
     void skipChecks;
-    if (!(await ensureConsent(ed.app, P, modelProfile(P.id, currentModel(P)).noPhoto))) return;
+    if (!(await ensureConsent(ed.app, P, modelProfile(P.id, currentModel(P), pcfg(cfg, P.id)).noPhoto))) return;
     if (closed) return;
     runJob();
   }
@@ -368,7 +367,7 @@ export function open(ed, body) {
     let variants = [];
     try {
       const model = await resolveModel(ed.app, P.id);
-      const M = modelProfile(P.id, model); // edit: 사진을 보고 고침 / generate: 문구만으로 그림(사진 미전송)
+      const M = modelProfile(P.id, model, pcfg(cfg, P.id)); // edit: 사진을 보고 고침 / generate: 문구만으로 그림(사진 미전송)
       const gen = M.mode === 'generate';
       if (ctl.signal.aborted) throw new AiError({ code: 'cancelled' });
       const prep = await prepareRequest(ed, { mask: eff, w: mw, h: mh }, { ctx: gen ? 0 : cfg.ctx, feather: cfg.feather, provider: M });
@@ -381,7 +380,7 @@ export function open(ed, body) {
         if (P.id === 'cloudflare' && cfg.translate !== false) { job.phase = 'translate'; text = (await translateToEnglish(S.prompt, { signal: ctl.signal })).text; } // 번역은 Cloudflare 만(문구를 다른 곳으로 더 보내지 않는다)
         blobs = await P.generate({ model, prompt: text, size: prep.size }, { signal: ctl.signal, onPhase });
       } else {
-        const req = await P.buildEdit({ model, prompt: S.prompt, size: prep.size }, { image: prep.imageBlob, marked: prep.markedBlob });
+        const req = await P.buildEdit({ model, prompt: S.prompt, size: prep.size }, { image: prep.imageBlob, marked: prep.markedBlob, mask: prep.maskBlob });
         blobs = await P.edit(req, { signal: ctl.signal, onPhase });
       }
       if (job) job.phase = 'finish';

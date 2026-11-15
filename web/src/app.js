@@ -131,7 +131,7 @@ export class App {
         h('p', { class: 'sheet-note' }, t('높을수록 선명하지만 메모리를 더 써요. 보통은 자동을 권장해요.', 'Higher is sharper but uses more memory. Auto is recommended.')),
         motion.el, grid.el, stats.el,
         h('div', { class: 'sheet-sec' }, t('AI 도구', 'AI tools')),
-        h('p', { class: 'sheet-note' }, bridge.ai.available() ? t('Cloudflare(하루 무료)·Pollinations(키 없이 무료)·ModelScope(무료 체험)로 선택한 영역을 새 그림으로 채우거나(Cloudflare는 사진을 보고 고치기도 해요) 새 이미지를 만들어요. 키는 기기에 암호화돼 저장돼요.', 'Fill a selected area or create new images with Cloudflare (daily free), Pollinations (free, no key) or ModelScope (free trial). Cloudflare can also edit using the photo. Keys are stored encrypted on this device.') : t('AI 기능은 앱(APK)에서만 쓸 수 있어요.', 'AI features work only in the app (APK).')),
+        h('p', { class: 'sheet-note' }, bridge.ai.available() ? t('Cloudflare(하루 무료)·ModelScope Qwen-Image-Edit·Gemini·Hugging Face FLUX.1 Fill 로 선택한 영역을 고치거나 채우고, 새 이미지도 만들어요(Cloudflare·Gemini). 내 키·토큰은 기기에 암호화돼 저장돼요.', 'Edit or fill a selected area with Cloudflare (daily free), ModelScope Qwen-Image-Edit, Gemini or Hugging Face FLUX.1 Fill, and create new images (Cloudflare, Gemini). Your keys/tokens are stored encrypted on this device.') : t('AI 기능은 앱(APK)에서만 쓸 수 있어요.', 'AI features work only in the app (APK).')),
         bridge.ai.available() ? Btn(t('AI 설정 (제공자·키·모델)', 'AI settings (provider · key · model)'), 'tonal', () => openAiSettings(this), 'key-round') : null,
         h('div', { class: 'sheet-sec' }, t('정보', 'About')),
         h('div', { class: 'kv' }, h('span', null, t('버전', 'Version')), h('b', null, VERSION)),

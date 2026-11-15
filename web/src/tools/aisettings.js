@@ -1,4 +1,4 @@
-// AI 설정: 제공자 선택(Cloudflare 하루 무료 / Pollinations 키 없이 무료 / ModelScope 무료 체험) · API 키(기기 Keystore 에 암호화 저장) · 모델 · 연결 테스트 · 개인정보 안내
+// AI 설정: 제공자 선택(Cloudflare · ModelScope Qwen-Image-Edit · Gemini · Hugging Face FLUX.1 Fill) · API 키/토큰(기기 Keystore 에 암호화 저장) · 모델 · 연결 테스트 · 개인정보 안내
 import { h } from '../ui/dom.js';
 import { t } from '../i18n.js';
 import { openModal, Segmented, Chips, Btn, toast, confirmDialog } from '../ui/components.js';
@@ -7,8 +7,8 @@ import { MODEL_AUTO, cleanKey, explainError } from '../ai/common.js';
 import { PROVIDERS, PROVIDER_IDS, getProvider, isCfGenerateModel } from '../ai/providers.js';
 
 const AI_DEFAULTS = { provider: 'cloudflare', ctx: 1, feather: 30, tone: true, translate: true };
-const P_DEFAULTS = () => ({ model: MODEL_AUTO, custom: '', models: [] });
-const REMOVED = ['openai', 'openrouter']; // 삭제된 제공자(1.5.0)
+const P_DEFAULTS = () => ({ model: MODEL_AUTO, custom: '', models: [], mode: 'edit' }); // mode: Gemini 의 편집/문구 채우기
+const REMOVED = ['openai', 'openrouter', 'pollinations']; // 삭제된 제공자(OpenAI·OpenRouter 1.5.0, Pollinations 1.6.0)
 
 /**
  * 설정의 AI 항목(같은 객체를 계속 돌려준다 — 여러 곳에서 고쳐도 한 객체에 모이도록). 키 자체는 여기 없다(네이티브 Keystore).
@@ -37,7 +37,7 @@ export function pcfg(cfg, pid) {
 }
 
 export const providerInfo = (pid) => { const i = bridge.ai.info(); return (i && i.providers && i.providers[pid]) || null; };
-/** 이 제공자를 바로 쓸 수 있나(키 + 필요한 부가 값. Pollinations 는 키가 필요 없어 늘 가능) */
+/** 이 제공자를 바로 쓸 수 있나(키 + 필요한 부가 값) */
 export function providerReady(pid) {
   const P = getProvider(pid);
   if (P.noKey) return true;
@@ -176,7 +176,7 @@ export function openAiSettings(app, opts = {}) {
     const hasKey = !!pi.hasKey;
     body.append(Chips({ label: t('AI 제공자', 'AI provider'), wrap: true, value: pid, items: PROVIDER_IDS.map((id) => ({ id, label: PROVIDERS[id].short, valueText: PROVIDERS[id].tag() })), onSelect: (id) => { pid = id; cfg.provider = id; app.saveSettings(); testMsg = null; keyMsg = null; storageMsg = null; keyInput.value = ''; render(); } }).el);
     body.append(h('p', { class: 'sheet-note' }, P.desc()));
-    if (P.noKey) { // Pollinations: 키가 필요 없다
+    if (P.noKey) { // (키가 필요 없는 제공자 — 지금은 없다)
       body.append(h('div', { class: 'kv' }, h('span', null, t('API 키', 'API key')), h('b', null, t('필요 없음', 'Not needed'))));
       body.append(h('p', { class: 'sheet-note' }, P.howto()));
     } else {
@@ -187,7 +187,7 @@ export function openAiSettings(app, opts = {}) {
         extraInput.value = pi.extra || extraInput.value;
         body.append(h('div', { class: 'sheet-sec' }, P.extra.label()), extraInput);
       }
-      keyInput.placeholder = pid === 'modelscope' ? t('ModelScope 액세스 토큰', 'ModelScope access token') : t('API 토큰', 'API token');
+      keyInput.placeholder = { modelscope: t('ModelScope 액세스 토큰', 'ModelScope access token'), gemini: t('Gemini API 키 (AIza…)', 'Gemini API key (AIza…)'), huggingface: t('Hugging Face 토큰 (hf_…)', 'Hugging Face token (hf_…)') }[pid] || t('API 토큰', 'API token');
       body.append(keyInput,
         h('div', { class: 'row wrap' }, Btn(hasKey ? t('저장 / 바꾸기', 'Save / replace') : t('키 저장', 'Save key'), 'tonal', saveKey, 'key-round'), hasKey ? Btn(t('키 삭제', 'Remove'), 'outlined', clearKey, 'trash-2') : null));
       if (keyMsg) body.append(h('p', { class: 'ai-keymsg ' + keyMsg.kind, role: keyMsg.kind === 'err' ? 'alert' : 'status' }, keyMsg.text));
@@ -202,12 +202,13 @@ export function openAiSettings(app, opts = {}) {
         onChange: (v) => { if (v === MODEL_AUTO) pc.model = MODEL_AUTO; else { pc.custom = pc.custom || P.modelPresets[0] || pc.models[0] || P.fallbackModel || ''; pc.model = pc.custom || 'manual'; } app.saveSettings(); render(); } }).el);
       if (!manual) {
         const auto = { cloudflare: t('FLUX.2 klein 4B(가볍고 빠름, 무료 한도를 아껴 써요)를 써요.', 'Uses FLUX.2 klein 4B (light and fast; stretches the free allowance).'),
-          modelscope: t('Qwen-Image 를 써요(문구로 이미지를 만드는 범용 모델).', 'Uses Qwen-Image (a general text-to-image model).') }[pid];
+          modelscope: t('Qwen-Image-Edit 를 써요(사진 편집 모델).', 'Uses Qwen-Image-Edit (a photo-editing model).'),
+          gemini: t('gemini-2.5-flash-image(“나노 바나나”)를 써요.', 'Uses gemini-2.5-flash-image ("Nano Banana").') }[pid];
         body.append(h('p', { class: 'sheet-note' }, auto + ' ' + t('현재: ', 'Current: ') + P.autoModel));
       } else {
         const ids = Array.from(new Set([...(P.modelPresets || []), ...(pc.models || [])]));
         body.append(Chips({ label: t('사용 가능한 모델', 'Available models'), wrap: true, value: pc.custom, items: ids.map((m) => ({ id: m, label: m, valueText: isCfGenerateModel(m) ? t('생성 전용', 'text-only') : undefined })), onSelect: (id) => { pc.custom = id; pc.model = id; customInput.value = id; app.saveSettings(); } }).el);
-        customInput.placeholder = pid === 'modelscope' ? 'Qwen/Qwen-Image' : '@cf/black-forest-labs/flux-2-klein-4b';
+        customInput.placeholder = { modelscope: 'Qwen/Qwen-Image-Edit', gemini: 'gemini-2.5-flash-image' }[pid] || '@cf/black-forest-labs/flux-2-klein-4b';
         customInput.value = pc.custom || '';
         customInput.onchange = () => { const v = customInput.value.trim().slice(0, 100); pc.custom = v; pc.model = v || MODEL_AUTO; app.saveSettings(); };
         body.append(customInput);

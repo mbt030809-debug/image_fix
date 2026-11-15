@@ -1,7 +1,6 @@
 // AI로 이미지 만들기: 문구만으로 새 이미지를 만든다. 사진은 보내지 않는다.
-//  - Pollinations.ai : 키 없이 무료(한 번에 한 장 · 약 45초 간격 · 작은 로고)
 //  - Cloudflare Workers AI · FLUX.1 schnell : 하루 무료 한도 (유튜브에서 가장 많이 소개되는 무료 이미지 생성 모델)
-//  - ModelScope API-Inference : Qwen-Image 등, 무료 체험 토큰(비동기 작업)
+//  - Google Gemini : gemini-2.5-flash-image("나노 바나나") — 내 API 키
 // 한국어 문구는 영어로 번역해서(Cloudflare 만, best-effort) 보내면 결과가 훨씬 좋다. 결과는 바로 편집기로 열 수 있다.
 import { h } from '../ui/dom.js';
 import { t } from '../i18n.js';
@@ -12,7 +11,7 @@ import { AiError } from '../ai/client.js';
 import { PROVIDERS, getProvider, translateToEnglish } from '../ai/providers.js';
 import { aiConfig, resolveModel, openAiSettings, providerReady, ensureConsent } from './aisettings.js';
 
-const GEN_PROVIDERS = ['cloudflare', 'pollinations', 'modelscope']; // 문구만으로 그릴 수 있는 제공자(모두)
+const GEN_PROVIDERS = ['cloudflare', 'gemini']; // 문구만으로 새 이미지를 만들 수 있는 제공자(ModelScope 는 편집 전용, Hugging Face 는 인페인팅 전용)
 const EXAMPLES = [
   { ko: '노을 지는 바다 위의 작은 돛단배, 수채화', en: 'A small sailboat on a sunset sea, watercolor' },
   { ko: '벚꽃이 흩날리는 한국 전통 마을', en: 'A traditional Korean village with falling cherry blossoms' },
@@ -23,10 +22,10 @@ const EXAMPLES = [
 /** 모양 → 제공자 크기 목록(P.sizes)의 순서: 0 정사각 · 1 가로 · 2 세로 */
 const SHAPES = [{ id: '0', ko: '정사각', en: 'Square' }, { id: '1', ko: '가로', en: 'Landscape' }, { id: '2', ko: '세로', en: 'Portrait' }];
 
-/** 처음 보여줄 제공자: 마지막에 쓴 것 → 설정이 끝난 것(Cloudflare, ModelScope 순) → 아무 설정 없이 바로 쓰는 Pollinations */
+/** 처음 보여줄 제공자: 마지막에 쓴 것 → 설정이 끝난 것(Cloudflare, Gemini 순) → Cloudflare */
 function firstProvider(cfg) {
   if (GEN_PROVIDERS.includes(cfg.genProvider)) return cfg.genProvider;
-  return ['cloudflare', 'modelscope'].find((p) => providerReady(p)) || 'pollinations';
+  return GEN_PROVIDERS.find((p) => providerReady(p)) || 'cloudflare';
 }
 
 /** 홈 화면의 "AI로 이미지 만들기" 시트 */
@@ -86,12 +85,11 @@ export function openGenerate(app) {
   /** 제공자 소개(한 줄) */
   const about = () => ({
     cloudflare: t('FLUX.1 schnell — 유튜브에서 가장 많이 소개되는 무료 이미지 생성 모델이에요. 하루 무료 한도 안에서 쓸 수 있고, 사진은 보내지 않아요.', 'FLUX.1 schnell — the free image model most YouTube tutorials use. Works within the daily free allowance; no photo is sent.'),
-    pollinations: t('가입도 키도 필요 없어요. 한 번에 한 장, 약 45초 간격으로 만들 수 있고 결과에 작은 로고가 붙을 수 있어요. 영어 문구가 가장 잘 그려져요. 사진은 보내지 않아요.', 'No signup or key. One image at a time, about 45 seconds apart; results may carry a small logo. English prompts work best. No photo is sent.'),
-    modelscope: t('Qwen-Image 등으로 만들어요(ModelScope 무료 체험 토큰 필요). 보통 10~60초 걸려요. 사진은 보내지 않아요.', 'Creates images with Qwen-Image and others (needs a free ModelScope trial token). Usually 10–60 seconds. No photo is sent.'),
+    gemini: t('Gemini 이미지 모델(나노 바나나)로 만들어요. 내 Gemini API 키가 필요하고, 무료 키는 이미지 모델 한도가 0 일 수 있어요. 사진은 보내지 않아요.', 'Creates images with the Gemini image model ("Nano Banana"). Needs your Gemini API key; a free key may have a zero quota for image models. No photo is sent.'),
   })[pid];
   const setupText = () => ({
     cloudflare: t('Cloudflare 계정 ID와 API 토큰을 넣으면 바로 쓸 수 있어요(무료 가입).', 'Enter your Cloudflare account ID and API token to start (free signup).'),
-    modelscope: t('ModelScope 액세스 토큰을 넣으면 쓸 수 있어요(무료 가입).', 'Enter your ModelScope access token to use it (free signup).'),
+    gemini: t('Gemini API 키를 넣으면 쓸 수 있어요(aistudio.google.com).', 'Enter your Gemini API key to use it (aistudio.google.com).'),
   })[pid];
 
   function render() {
@@ -109,7 +107,6 @@ export function openGenerate(app) {
       const img = h('img', { class: 'ai-gen-result', src: st.url, alt: t('AI가 만든 이미지', 'AI-generated image') });
       body.append(...[img,
         h('p', { class: 'sheet-note' }, t('사용한 문구: ', 'Prompt used: ') + st.used + (st.translated ? t(' (영어로 번역됨)', ' (translated)') : '')),
-        pid === 'pollinations' ? h('p', { class: 'sheet-note' }, t('Pollinations 는 약 45초에 한 장만 만들 수 있어요. “다시 만들기”는 잠시 뒤에 눌러 주세요.', 'Pollinations makes about one image per 45 seconds. Wait a moment before "Create again".')) : null,
         h('div', { class: 'row wrap' }, Btn(t('편집하기', 'Edit'), 'filled', edit, 'wand-sparkles'), Btn(t('다시 만들기', 'Create again'), 'outlined', run, 'refresh-cw'), Btn(t('문구 고치기', 'Change prompt'), 'text', () => { st.phase = 'form'; render(); }))].filter(Boolean));
       return;
     }

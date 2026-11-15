@@ -105,9 +105,9 @@ export const bridge = {
    */
   ai: {
     available() { return !!(A && A.aiInfo); },
-    /** {v:3, providers:{cloudflare:{hasKey,hint,extra,readable,prot}, pollinations:{…}, modelscope:{…}}} (키 자체는 없음 — pollinations 는 키가 필요 없다) */
+    /** {v:3, providers:{cloudflare:{hasKey,hint,extra,readable,prot}, modelscope:{…}, gemini:{…}, huggingface:{…}}} (키 자체는 없음) */
     info() { try { return A && A.aiInfo ? JSON.parse(A.aiInfo()) : null; } catch (e) { return null; } },
-    /** key 가 빈 문자열이면 키는 유지하고 부가 값(cloudflare 계정 ID)만 바꾼다. 성공 true, 실패 시 사유 문자열("ERR:badkey" · "ERR:badextra" · "ERR:nokey" · "ERR:store:<원인>" …) */
+    /** key 가 빈 문자열이면 키는 유지하고 부가 값(cloudflare 계정 ID)만 바꾼다. 성공 true, 실패 시 사유 문자열("ERR:badkey" · "ERR:badextra" · "ERR:store:<원인>" …) */
     setKey(provider, key, extra) { const r = A.aiSetKey(provider, key || '', extra || ''); return r === 'OK' ? true : String(r || 'ERR:unknown'); },
     clearKey(provider) { A.aiClearKey(provider); },
     /** 키 보관(암호화) 방식 점검 결과 "hw=ok sw=ok" (없으면 ''). 키 값은 쓰지 않는다 */
@@ -126,11 +126,9 @@ export const bridge = {
   exit() { if (A) A.exit(); },
 };
 
-export function blobToB64(blob) {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onload = () => { const s = String(fr.result); resolve(s.slice(s.indexOf(',') + 1)); };
-    fr.onerror = () => reject(fr.error);
-    fr.readAsDataURL(blob);
-  });
+export async function blobToB64(blob) { // (FileReader 없이 — Node 단위 테스트에서도 쓴다)
+  const u8 = new Uint8Array(await blob.arrayBuffer());
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
 }

@@ -11,7 +11,7 @@ export class AiError extends Error {
 }
 
 /**
- * provider: 'cloudflare' | 'pollinations' | 'modelscope'
+ * provider: 'cloudflare' | 'modelscope' | 'gemini' | 'huggingface'
  * req: {method, path, contentType?, body?: Blob}  또는 결과 이미지 내려받기 {method:'GET', url} (허용된 도메인만 — 네이티브가 검사)
  * opts: {signal?: AbortSignal, onPhase?: (phase)=>void, timeoutMs?: number}
  * 반환 {id, status} (state==='done'). 결과를 다 쓴 뒤 bridge.ai.release(id) 는 호출자 책임.
@@ -21,6 +21,7 @@ export async function runRelay(provider, req, opts = {}) {
   const body = req.body || null;
   const spec = req.url ? { provider, method: req.method, url: req.url } : { provider, method: req.method, path: req.path };
   if (body) { spec.type = req.contentType; spec.len = body.size; }
+  if (req.tt) spec.tt = req.tt; // ModelScope 작업 종류(편집)
   if (signal && signal.aborted) throw new AiError({ code: 'cancelled' });
   const id = bridge.ai.begin(spec);
   let finished = false;
