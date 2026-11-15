@@ -19,6 +19,7 @@ run node resize.cjs
 run node history.cjs
 run node ai.cjs
 run node ai_free.cjs
+run node ai_gen.cjs
 run node layouts.cjs
 run node monkey.cjs 1 100
 run node monkey.cjs 2 100 portrait.jpg

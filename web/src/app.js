@@ -8,9 +8,10 @@ import { bridge } from './bridge.js';
 import * as Drafts from './drafts.js';
 import { toast, openModal, Segmented, Switch, Chips, Btn, Slider, handleBack, confirmDialog } from './ui/components.js';
 import { openAiSettings, aiConfig } from './tools/aisettings.js';
+import { openGenerate } from './tools/aigenerate.js';
 
 const SETTINGS_KEY = 'imagefix.settings';
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 
 async function decodeFile(file) {
   const opts = { imageOrientation: 'from-image', premultiplyAlpha: 'none', colorSpaceConversion: 'default' };
@@ -76,15 +77,19 @@ export class App {
     }
     const col = h('button', { class: 'tile', type: 'button' }, icon('layout-grid', 'lg'), h('b', null, t('콜라주', 'Collage')), h('span', null, t('여러 장을 한 장으로', 'Combine several photos')));
     col.addEventListener('click', () => { this.pendingCollage = true; bridge.pickImages(true); }); tiles.push(col);
+    if (bridge.ai.available()) {
+      const gen = h('button', { class: 'tile', type: 'button' }, icon('wand-sparkles', 'lg'), h('b', null, t('AI로 이미지 만들기', 'Create with AI')), h('span', null, t('문구만으로 새 이미지 (무료 옵션)', 'New image from a prompt (free option)')));
+      gen.addEventListener('click', () => openGenerate(this)); tiles.push(gen);
+    }
     const blank = h('button', { class: 'tile', type: 'button' }, icon('square-dashed', 'lg'), h('b', null, t('빈 캔버스', 'Blank canvas')), h('span', null, t('텍스트·스티커로 디자인', 'Design with text & stickers')));
     blank.addEventListener('click', () => this.openBlankDialog()); tiles.push(blank);
     this.draftCard = h('div', { hidden: true });
     const wrap = h('div', { class: 'wrap' },
       h('header', null, h('div', { class: 'brand' }, logo, h('span', { translate: 'no' }, 'ImageFix')), settingsBtn),
       this.draftCard,
-      h('section', { class: 'hero' }, h('h1', null, t('편집할 사진을 선택하세요', 'Choose a photo to edit')), h('p', null, t('자르기, 보정, 필터부터 텍스트·스티커·리터치까지. 편집은 이 기기 안에서 처리되고, AI 수정을 쓸 때만 선택한 영역이 AI 서버로 가요.', 'Crop, adjust, filters, text, stickers and retouch. Editing runs on this device; only when you use AI edit is the area you select sent to an AI server.')), pick),
+      h('section', { class: 'hero' }, h('h1', null, t('편집할 사진을 선택하세요', 'Choose a photo to edit')), h('p', null, t('자르기, 보정, 필터부터 텍스트·스티커·리터치까지. 편집은 이 기기 안에서 처리되고, AI 기능을 쓸 때만 선택한 영역(또는 입력한 문구)이 AI 서버로 가요.', 'Crop, adjust, filters, text, stickers and retouch. Editing runs on this device; only when you use AI features is the area you select (or your prompt) sent to an AI server.')), pick),
       h('div', { class: 'tiles' }, ...tiles),
-      h('p', { class: 'foot' }, t('기본은 오프라인 · 인터넷은 AI 수정을 쓸 때만, 선택한 영역만 사용해요', 'Offline by default · the internet is used only for AI edit, and only for the area you select')));
+      h('p', { class: 'foot' }, t('기본은 오프라인 · 인터넷은 AI 기능을 쓸 때만, 필요한 부분(선택 영역·문구)만 사용해요', 'Offline by default · the internet is used only for AI features, and only for what you select or type')));
     const el = h('div', { class: 'screen home' }, wrap);
     return el;
   }
@@ -126,11 +131,11 @@ export class App {
         h('p', { class: 'sheet-note' }, t('높을수록 선명하지만 메모리를 더 써요. 보통은 자동을 권장해요.', 'Higher is sharper but uses more memory. Auto is recommended.')),
         motion.el, grid.el, stats.el,
         h('div', { class: 'sheet-sec' }, t('AI 수정', 'AI edit')),
-        h('p', { class: 'sheet-note' }, bridge.ai.available() ? t('내 API 키(OpenAI·OpenRouter·Cloudflare)로 선택한 영역만 AI 에 맡겨요. 무료로 쓸 수 있는 옵션도 있어요. 키는 기기에 암호화돼 저장돼요.', 'Send only a selected area to AI using your own API key (OpenAI, OpenRouter or Cloudflare). Free options are available. The key is stored encrypted on this device.') : t('AI 수정은 앱(APK)에서만 쓸 수 있어요.', 'AI edit works only in the app (APK).')),
+        h('p', { class: 'sheet-note' }, bridge.ai.available() ? t('내 API 키(OpenAI·OpenRouter·Cloudflare)로 선택한 영역을 고치거나 새 이미지를 만들어요. 무료로 쓸 수 있는 옵션도 있어요. 키는 기기에 암호화돼 저장돼요.', 'Edit a selected area or create new images with your own API key (OpenAI, OpenRouter or Cloudflare). Free options are available. The key is stored encrypted on this device.') : t('AI 수정은 앱(APK)에서만 쓸 수 있어요.', 'AI edit works only in the app (APK).')),
         bridge.ai.available() ? Btn(t('AI 설정 (제공자·키·모델)', 'AI settings (provider · key · model)'), 'tonal', () => openAiSettings(this), 'key-round') : null,
         h('div', { class: 'sheet-sec' }, t('정보', 'About')),
         h('div', { class: 'kv' }, h('span', null, t('버전', 'Version')), h('b', null, VERSION)),
-        h('p', { class: 'sheet-note' }, t('아이콘: Lucide (ISC), 폰트: SIL OFL 1.1. 인터넷 권한은 AI 수정에만 쓰여요. AI 수정을 쓰지 않으면 사진은 기기 밖으로 나가지 않아요.', 'Icons: Lucide (ISC), fonts: SIL OFL 1.1. The internet permission is used only by AI edit. If you never use AI edit, your photos never leave the device.')));
+        h('p', { class: 'sheet-note' }, t('아이콘: Lucide (ISC), 폰트: SIL OFL 1.1. 인터넷 권한은 AI 기능(AI 수정·이미지 만들기)에만 쓰여요. 쓰지 않으면 사진은 기기 밖으로 나가지 않아요.', 'Icons: Lucide (ISC), fonts: SIL OFL 1.1. The internet permission is used only by AI features (AI edit, Create with AI). If you never use them, your photos never leave the device.')));
     } });
   }
 
@@ -168,6 +173,11 @@ export class App {
     this.screen = 'home'; this.editor.closeTool(false); this.editor.el.hidden = true; this.collage.el.hidden = true; this.homeEl.hidden = false;
     clearTimeout(this.editor.draftT);
     if (keepDraft) this.refreshDraftCard(); else Drafts.clearAll().then(() => this.refreshDraftCard());
+  }
+
+  /** AI 로 만든 이미지(Blob)를 바로 편집기로 연다 */
+  async openGenerated(blob) {
+    await this.openFiles([new File([blob], 'AI 이미지.png', { type: blob.type || 'image/png' })]);
   }
 
   async openFiles(files) {

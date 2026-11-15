@@ -25,7 +25,8 @@ export function markedCanvas(cv, selFull, size) {
 }
 
 /**
- * ed: Editor, sel: {mask, w, h} (격자 마스크, 표시 영역 기준), opts: {ctx: 0..2, feather: 0..100, provider: 제공자(sizes/usesMask)}
+ * ed: Editor, sel: {mask, w, h} (격자 마스크, 표시 영역 기준), opts: {ctx: 0..2, feather: 0..100, provider: {sizes, usesMask, noPhoto}}
+ * noPhoto(문구만으로 그리는 모델): 사진을 인코딩/전송하지 않는다 — 영역 위치·크기 계산과 미리보기만 한다.
  * 반환: 요청에 필요한 모든 것 (imageBlob, maskBlob | markedBlob, size, fit, rect, …)
  */
 export async function prepareRequest(ed, sel, opts) {
@@ -59,9 +60,10 @@ export async function prepareRequest(ed, sel, opts) {
   const origData = c.getImageData(0, 0, size.w, size.h);
   const sigmaReq = featherSigma(opts.feather == null ? 30 : opts.feather, full, plan.k);
   const dil = Math.max(3, Math.min(Math.round(0.04 * Math.max(size.w, size.h)), Math.round(sigmaReq * 2) + 3));
-  const imageBlob = await toBlob(cv);
+  const noPhoto = !!P.noPhoto;
+  const imageBlob = noPhoto ? null : await toBlob(cv);
   let maskBlob = null, markedBlob = null;
-  if (P.usesMask) {
+  if (noPhoto) { /* 사진은 보내지 않는다 */ } else if (P.usesMask) {
     const maskRGBA = apiMaskRGBA(selFull, size, dil);
     const mcv = mkCanvas(size.w, size.h);
     mcv.getContext('2d').putImageData(new ImageData(maskRGBA, size.w, size.h), 0, 0);
@@ -70,17 +72,22 @@ export async function prepareRequest(ed, sel, opts) {
     markedBlob = await toBlob(markedCanvas(cv, selFull, size));
   }
   const place = layerPlacement(rect, full, crop, Wo, Ho);
-  return { plan, size, fit, fitO, rect, full, crop, selFit, selFitO, selFull, origData, imageBlob, maskBlob, markedBlob, preview: cv, dil, place, kx, ky };
+  return { plan, size, fit, fitO, rect, full, crop, selFit, selFitO, selFull, origData, imageBlob, maskBlob, markedBlob, preview: cv, dil, place, kx, ky, noPhoto };
 }
 
-/** AI 결과 이미지 → 패치 캔버스(fitO 크기, alpha = 부드러운 선택 마스크). opts: {feather, tone} */
+/** AI 결과 이미지 → 패치 캔버스(fitO 크기, alpha = 부드러운 선택 마스크). opts: {feather, tone, cover(문구로 그린 이미지: 영역을 덮도록 잘라 맞춤)} */
 export async function makePatch(blob, prep, opts) {
   const { size, fit, fitO, plan, kx, ky } = prep;
   const bmp = await createImageBitmap(blob);
   const S = mkCanvas(size.w, size.h);
   const sc = S.getContext('2d', { willReadFrequently: true });
   sc.imageSmoothingQuality = 'high';
-  sc.drawImage(bmp, 0, 0, size.w, size.h);
+  const place = (ctx2, W, H) => { // 보통은 늘려 맞추고, 문구로 그린 이미지(cover)는 비율을 지키며 영역을 덮도록 가운데를 잘라 맞춘다
+    if (!opts.cover) { ctx2.drawImage(bmp, 0, 0, W, H); return; }
+    const k = Math.max(W / bmp.width, H / bmp.height), dw = bmp.width * k, dh = bmp.height * k;
+    ctx2.drawImage(bmp, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  };
+  place(sc, size.w, size.h);
   const aiS = sc.getImageData(0, 0, size.w, size.h).data;
   const out = size.out || size;
   let aiO = aiS;
@@ -88,7 +95,7 @@ export async function makePatch(blob, prep, opts) {
     const O = mkCanvas(out.w, out.h);
     const oc = O.getContext('2d', { willReadFrequently: true });
     oc.imageSmoothingQuality = 'high';
-    oc.drawImage(bmp, 0, 0, out.w, out.h);
+    place(oc, out.w, out.h);
     aiO = oc.getImageData(0, 0, out.w, out.h).data;
   }
   if (bmp.close) bmp.close();

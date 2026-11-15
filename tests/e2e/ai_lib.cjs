@@ -13,13 +13,13 @@ const init = () => {
   const prov = { openai: { key: null, base: 'https://api.openai.com/v1', hint: '', extra: '' }, openrouter: { key: null, base: 'https://openrouter.ai/api/v1', hint: '', extra: '' }, cloudflare: { key: null, base: 'https://api.cloudflare.com/client/v4', hint: '', extra: '' } };
   const orModel = (id, created, free, edit) => ({ id, name: id, created, architecture: { input_modalities: edit ? ['image', 'text'] : ['text'], output_modalities: ['image', 'text'] }, pricing: free ? { prompt: '0', completion: '0', image: '0', request: '0' } : { prompt: '0.0000003', completion: '0.0000025', image: '0.001', request: '0' } });
   const S = window.__ai = {
-    log: [], specs: [], mode: 'ok', jobs: {}, results: {}, delay: 600, setKeyCalls: [], cfBinary: false,
+    log: [], specs: [], mode: 'ok', tr: 'ok', jobs: {}, results: {}, delay: 600, setKeyCalls: [], cfBinary: false,
     modelIds: ['gpt-4o', 'gpt-image-1', 'gpt-image-1.5', 'gpt-image-1-mini'],
     orModels: [orModel('paid/nano-banana', 500, false, true), orModel('x-ai/grok-imagine-free:free', 300, true, true), orModel('free/text-to-image-only:free', 400, true, false), orModel('old/flux-edit:free', 100, true, true), orModel('some/text-model', 50, true, false)],
     cfModels: ['@cf/black-forest-labs/flux-2-klein-4b', '@cf/black-forest-labs/flux-2-dev', '@cf/meta/llama-3.1-8b-instruct'],
   };
   const ROUTES = {
-    openai: [['POST', /^\/images\/edits$/, /^multipart\/form-data; boundary=/], ['GET', /^\/models$/, null]],
+    openai: [['POST', /^\/images\/edits$/, /^multipart\/form-data; boundary=/], ['POST', /^\/images\/generations$/, /^application\/json$/], ['GET', /^\/models$/, null]],
     openrouter: [['POST', /^\/chat\/completions$/, /^application\/json$/], ['GET', /^\/models$/, null], ['GET', /^\/key$/, null]],
     cloudflare: [['POST', /^\/accounts\/\{account\}\/ai\/run\/@cf\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/, /^(application\/json|multipart\/form-data; boundary=)/], ['GET', /^\/accounts\/\{account\}\/ai\/models\/search$/, null]],
   };
@@ -71,6 +71,29 @@ const init = () => {
     if (p === 'openrouter' && route === '/models') { await sleep(40); return finishRaw(j, id, 'application/json', textB64(JSON.stringify({ data: S.orModels }))); }
     if (p === 'openrouter' && route === '/key') { await sleep(20); if (S.mode === 'e401key') return fail(j, 401, '401', 'No auth credentials found'); return finishRaw(j, id, 'application/json', textB64(JSON.stringify({ data: { label: 'test', is_free_tier: true } }))); }
     if (p === 'cloudflare' && route.endsWith('/ai/models/search')) { await sleep(30); return finishRaw(j, id, 'application/json', textB64(JSON.stringify({ result: S.cfModels.map((name) => ({ name })), success: true, errors: [], messages: [] }))); }
+    // ------------------------------------------------------------ 문구만으로 그리는 요청(생성/번역): 사진 없음
+    const isTr = p === 'cloudflare' && /\/ai\/run\/@cf\/meta\/m2m100-1\.2b$/.test(route);
+    const isGen = (p === 'openai' && route === '/images/generations') || (p === 'cloudflare' && /\/ai\/run\/@cf\/black-forest-labs\/flux-1-schnell$/.test(route));
+    if (isTr || isGen) {
+      const gb = JSON.parse(new TextDecoder().decode(decodeChunks(j)));
+      if (isTr) {
+        S.log.push({ provider: p, kind: 'translate', path: String(j.spec.path), text: gb.text, source_lang: gb.source_lang, target_lang: gb.target_lang });
+        await sleep(30);
+        if (S.tr === 'fail') return fail(j, 400, 'bad_request', 'invalid language');
+        const out = S.tr === 'garbage' ? gb.text : (/돛단배/.test(gb.text) ? 'a small sailboat on a sunset sea, watercolor' : /하늘/.test(gb.text) ? 'a clear blue sky with soft fluffy clouds' : 'an english version of the prompt');
+        return finishRaw(j, id, 'application/json', textB64(JSON.stringify({ result: { translated_text: out }, success: true, errors: [], messages: [] })));
+      }
+      S.log.push({ provider: p, kind: 'generate', path: String(j.spec.path), model: p === 'openai' ? gb.model : String(j.spec.path).split('/ai/run/')[1], prompt: gb.prompt, keys: Object.keys(gb), size: gb.size, n: gb.n, quality: gb.quality });
+      if (!(await waitOrCancel(j))) return;
+      if (S.mode === 'e429free') return fail(j, 429, p === 'cloudflare' ? 'cf_3036' : '429', 'you have used up your daily free allocation of 10,000 neurons, please upgrade');
+      if (S.mode === 'e401') return fail(j, 401, 'invalid_api_key', 'Incorrect API key provided');
+      const gc = document.createElement('canvas'); gc.width = 1024; gc.height = 1024;
+      const gx = gc.getContext('2d'); gx.fillStyle = 'rgb(30,160,60)'; gx.fillRect(0, 0, 1024, 1024);
+      const g64 = await toPng(gc);
+      if (p === 'openai') { S.results[id] = [{ b64: g64, type: 'image/png' }]; j.n = 1; j.state = 'done'; return; }
+      if (S.cfBinary) return finishRaw(j, id, 'image/png', g64);
+      return finishRaw(j, id, 'application/json', textB64(JSON.stringify({ result: { image: g64 }, success: true, errors: [], messages: [] })));
+    }
     // ------------------------------------------------------------ 편집 요청
     const u8 = decodeChunks(j);
     let rec, region, orig, outW, outH, n = 1;
@@ -116,7 +139,7 @@ const init = () => {
   window.Android = {
     deviceInfo: () => JSON.stringify({ sdk: 34, memMB: 6000, camera: true, model: 'Fake' }),
     pendingCount: () => pending, clearPending: () => { pending = 0; },
-    pickImages: () => {}, takePhoto: () => {}, setBars: () => {}, toast: () => {}, haptic: () => {}, keepScreenOn: () => {}, exit: () => {},
+    pickImages: () => { pending = 1; setTimeout(() => window.__nativeImages && window.__nativeImages(), 30); }, takePhoto: () => {}, setBars: () => {}, toast: () => {}, haptic: () => {}, keepScreenOn: () => {}, exit: () => {},
     aiInfo: () => JSON.stringify({ v: 2, providers: Object.fromEntries(Object.entries(prov).map(([k, v]) => [k, { hasKey: !!v.key, hint: v.hint, base: v.base, extra: v.extra }])) }),
     aiSetKey: (provider, k, b, extra) => {
       S.setKeyCalls.push([provider, k ? 'key' : '', b, extra]);

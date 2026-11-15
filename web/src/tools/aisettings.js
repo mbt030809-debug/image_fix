@@ -1,13 +1,13 @@
 // AI 설정: 제공자 선택(OpenAI / OpenRouter 무료 모델 / Cloudflare 하루 무료) · API 키(기기 Keystore 에 암호화 저장) · 모델 · 연결 테스트 · 개인정보 안내
 import { h } from '../ui/dom.js';
 import { t } from '../i18n.js';
-import { openModal, Segmented, Chips, Btn, toast } from '../ui/components.js';
+import { openModal, Segmented, Chips, Btn, toast, confirmDialog } from '../ui/components.js';
 import { bridge } from '../bridge.js';
 import { DEFAULT_BASE, MODEL_AUTO, cleanKey, explainError } from '../ai/openai.js';
 import { AiError } from '../ai/client.js';
-import { PROVIDERS, PROVIDER_IDS, getProvider } from '../ai/providers.js';
+import { PROVIDERS, PROVIDER_IDS, getProvider, isCfGenerateModel } from '../ai/providers.js';
 
-const AI_DEFAULTS = { provider: 'openai', quality: 'medium', n: 1, ctx: 1, feather: 30, tone: true };
+const AI_DEFAULTS = { provider: 'openai', quality: 'medium', n: 1, ctx: 1, feather: 30, tone: true, translate: true };
 const P_DEFAULTS = () => ({ model: MODEL_AUTO, custom: '', resolved: '', models: [], free: [], meta: {} });
 
 /**
@@ -71,6 +71,24 @@ export function privacyNote(pid) {
   const P = getProvider(pid);
   const pi = providerInfo(pid);
   return P.privacy(P.host(pi)) + ' ' + t('AI 수정을 쓰지 않으면 앱은 인터넷을 쓰지 않아요.', 'If you never use AI edit, the app never uses the internet.');
+}
+
+/**
+ * 첫 전송 전 동의(제공자·종류별). textOnly = 사진 없이 문구만 보내는 경우(생성). 동의했으면(이미 했으면) true
+ */
+export async function ensureConsent(app, P, textOnly) {
+  const cfg = aiConfig(app);
+  const host = P.host(providerInfo(P.id));
+  const key = textOnly ? P.id + ':text' : P.id;
+  if (cfg.consents[key] === host) return true;
+  const body = textOnly && P.privacyText ? P.privacyText(host) + ' ' + t('AI 기능을 쓰지 않으면 앱은 인터넷을 쓰지 않아요.', 'If you never use AI features, the app never uses the internet.') : privacyNote(P.id);
+  const v = await confirmDialog({
+    title: textOnly ? t('AI 서버로 문구를 보내요', 'Send your prompt to an AI server') : t('AI 서버로 사진 일부를 보내요', 'Send part of your photo to an AI server'),
+    body, actions: [{ label: t('취소', 'Cancel'), value: 'no' }, { label: t('동의하고 계속', 'Agree & continue'), value: 'yes', kind: 'filled' }],
+  });
+  if (v !== 'yes') return false;
+  cfg.consents[key] = host; app.saveSettings();
+  return true;
 }
 
 /** 설정 모달. opts: {provider: 처음 보여줄 제공자, onClose()} */
@@ -168,7 +186,7 @@ export function openAiSettings(app, opts = {}) {
       body.append(h('p', { class: 'sheet-note' }, auto + (cur ? ' ' + t('현재: ', 'Current: ') + cur : '')));
     } else {
       const ids = Array.from(new Set([...(P.modelPresets || []), ...(pc.models || [])]));
-      if (ids.length) body.append(Chips({ label: t('사용 가능한 모델', 'Available models'), wrap: true, value: pc.custom, items: ids.map((m) => ({ id: m, label: m, valueText: (pc.free || []).includes(m) ? t('무료', 'free') : undefined })), onSelect: (id) => { pc.custom = id; pc.model = id; customInput.value = id; app.saveSettings(); } }).el);
+      if (ids.length) body.append(Chips({ label: t('사용 가능한 모델', 'Available models'), wrap: true, value: pc.custom, items: ids.map((m) => ({ id: m, label: m, valueText: isCfGenerateModel(m) ? t('생성 전용', 'text-only') : (pc.free || []).includes(m) ? t('무료', 'free') : undefined })), onSelect: (id) => { pc.custom = id; pc.model = id; customInput.value = id; app.saveSettings(); } }).el);
       customInput.placeholder = pid === 'openrouter' ? 'vendor/model:free' : pid === 'cloudflare' ? '@cf/black-forest-labs/flux-2-klein-4b' : 'gpt-image-…';
       customInput.value = pc.custom || '';
       customInput.onchange = () => { const v = customInput.value.trim().slice(0, 100); pc.custom = v; pc.model = v || MODEL_AUTO; app.saveSettings(); };

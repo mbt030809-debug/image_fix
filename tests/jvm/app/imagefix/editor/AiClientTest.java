@@ -108,6 +108,11 @@ public class AiClientTest {
                         lastHeaders.set(x.getRequestHeaders());
                         String a = Base64.getEncoder().encodeToString(IMG_A), b = Base64.getEncoder().encodeToString(IMG_B);
                         reply(x, 200, "{\"created\":1,\"data\":[{\"b64_json\":\"" + a + "\",\"revised_prompt\":\"x\"},{\"b64_json\":\"" + b + "\"}],\"usage\":{\"total_tokens\":5}}");
+                    } else if (p.equals("/ok/v1/images/generations")) {
+                        lastBody.set(body);
+                        lastHeaders.set(x.getRequestHeaders());
+                        lastPath.set(p);
+                        reply(x, 200, "{\"created\":1,\"data\":[{\"b64_json\":\"" + Base64.getEncoder().encodeToString(IMG_A) + "\"}]}");
                     } else if (p.equals("/ok/v1/models")) {
                         lastHeaders.set(x.getRequestHeaders());
                         reply(x, 200, "{\"object\":\"list\",\"data\":[{\"id\":\"gpt-4o\",\"object\":\"model\"},{\"id\":\"gpt-image-1\"},{\"id\":\"gpt-image-1.5\",\"owned_by\":\"system\"}]}");
@@ -347,6 +352,21 @@ public class AiClientTest {
         expectErrorWith(new AiClient(new Cfg("x", "x").with("openrouter", root + "/orerr/api/v1", "sk-or-v1-222222", null)), "openrouter", "/chat/completions", 429, "429", "free-models-per-day | upstream details");
         expectErrorWith(new AiClient(new Cfg("x", "x").with("openrouter", root + "/or402/api/v1", "sk-or-v1-222222", null)), "openrouter", "/chat/completions", 402, "402", "Insufficient credits");
         expectErrorWith(new AiClient(new Cfg("x", "x").with("cloudflare", root + "/cferr/client/v4", "cf-token-333333", ACC)), "cloudflare", "/accounts/{account}/ai/run/@cf/a/b", 429, "cf_3036", "daily free allocation");
+
+        // 문구만으로 생성하는 경로: OpenAI /images/generations(JSON → images 모드), Cloudflare flux-1-schnell · m2m100(번역)
+        ok("ERR:type".equals(cp.begin("{\"provider\":\"openai\",\"method\":\"POST\",\"path\":\"/images/generations\",\"type\":\"" + MP + "\",\"len\":3}")), "openai generations requires json");
+        byte[] gbody = "{\"model\":\"gpt-image-1\",\"prompt\":\"a boat\",\"size\":\"1024x1024\",\"n\":1}".getBytes(UTF8);
+        String gid = cp.begin("{\"provider\":\"openai\",\"method\":\"POST\",\"path\":\"/images/generations\",\"type\":\"application/json\",\"len\":" + gbody.length + "}");
+        ok(gid.startsWith("a"), "openai generations begin ok");
+        cp.chunk(gid, Base64.getEncoder().encodeToString(gbody));
+        cp.send(gid);
+        JSONObject gst = waitDone(cp, gid, 6000);
+        ok("done".equals(gst.optString("state")) && gst.optInt("n") == 1 && !gst.has("raw") && Arrays.equals(cp.result(gid, 0), IMG_A) && Arrays.equals(lastBody.get(), gbody) && "Bearer sk-openai-111111".equals(lastHeaders.get().getFirst("Authorization")), "openai generations → decoded image (images mode), own key: " + gst);
+        String fid = cp.begin("{\"provider\":\"cloudflare\",\"method\":\"POST\",\"path\":\"/accounts/{account}/ai/run/@cf/black-forest-labs/flux-1-schnell\",\"type\":\"application/json\",\"len\":2}");
+        String tid = cp.begin("{\"provider\":\"cloudflare\",\"method\":\"POST\",\"path\":\"/accounts/{account}/ai/run/@cf/meta/m2m100-1.2b\",\"type\":\"application/json\",\"len\":2}");
+        ok(fid.startsWith("a") && tid.startsWith("a"), "cloudflare flux-1-schnell and m2m100 paths are allowed (json, {account})");
+        cp.release(fid);
+        cp.release(tid);
 
         // 바이너리 이미지 응답(raw) / 허용되지 않은 Content-Type
         AiClient cbin = new AiClient(new Cfg("x", "x").with("cloudflare", root + "/cfbin/client/v4", "cf-token-333333", ACC));

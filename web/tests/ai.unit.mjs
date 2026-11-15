@@ -8,7 +8,7 @@ import {
 } from '../src/ai/plan.js';
 import { pickBestImageModel, listImageModels, wrapPrompt, buildMultipart, buildEditRequest, explainError, cleanKey } from '../src/ai/openai.js';
 import {
-  PROVIDERS, PROVIDER_IDS, SIZES_FREE, SIZES_CF, CF_MODELS, CF_MODEL_RE, blobToBase64, base64ToBlob, dataUrlToBlob, sniffType, instruct,
+  PROVIDERS, PROVIDER_IDS, SIZES_FREE, SIZES_CF, CF_MODELS, CF_GENERATE_MODELS, CF_MODEL_RE, isCfGenerateModel, modelProfile, hasHangul, translateToEnglish, blobToBase64, base64ToBlob, dataUrlToBlob, sniffType, instruct,
   extractOpenRouterImages, parseOpenRouterModels, pickFreeImageModel, orderOpenRouterModels, parseCfModels, parseCloudflareImage,
 } from '../src/ai/providers.js';
 import { AiError } from '../src/ai/client.js';
@@ -391,6 +391,38 @@ section('providers: registry / sizes / errors / config');
   ok(aiConfig(app2).provider === 'openai' && aiConfig(app2).p && aiConfig(app2).consents, 'fresh settings');
   const app3 = { settings: { ai: { provider: 'nope' } } };
   ok(aiConfig(app3).provider === 'openai', 'unknown provider falls back');
+}
+
+section('providers: generation-only models / translation');
+{
+  const SCH = '@cf/black-forest-labs/flux-1-schnell';
+  ok(isCfGenerateModel(SCH) && isCfGenerateModel('@cf/stabilityai/stable-diffusion-xl-base-1.0') && isCfGenerateModel('@cf/lykon/dreamshaper-8-lcm') && !isCfGenerateModel(CF_MODELS[0]) && !isCfGenerateModel('') && !isCfGenerateModel(null), 'isCfGenerateModel: text-to-image models only');
+  ok(CF_GENERATE_MODELS[0] === SCH && PROVIDERS.cloudflare.generateModel === SCH && PROVIDERS.cloudflare.modelPresets.includes(SCH) && CF_MODELS.every((m) => !isCfGenerateModel(m)), 'schnell is the Cloudflare generation model and is selectable');
+  const g = modelProfile('cloudflare', SCH);
+  ok(g.mode === 'generate' && g.noPhoto === true && g.usesMask === false && g.sizes === SIZES_FREE, 'profile: Cloudflare schnell = generate, no photo, no mask');
+  const e1 = modelProfile('cloudflare', CF_MODELS[0]), e2 = modelProfile('openai', 'gpt-image-1'), e3 = modelProfile('openrouter', 'a/b:free'), e4 = modelProfile('nope', 'x');
+  ok(e1.mode === 'edit' && !e1.noPhoto && e1.sizes === SIZES_CF && !e1.usesMask, 'profile: FLUX.2 = edit with marked image (CF sizes)');
+  ok(e2.mode === 'edit' && e2.usesMask && e2.sizes === SIZES && e3.mode === 'edit' && !e3.usesMask && e3.sizes === SIZES_FREE && e4.mode === 'edit' && e4.usesMask, 'profile: OpenAI mask edit, OpenRouter marked edit, unknown provider → OpenAI');
+  ok(typeof PROVIDERS.openai.generate === 'function' && typeof PROVIDERS.cloudflare.generate === 'function' && PROVIDERS.openrouter.generate === undefined, 'generation capability per provider');
+  ok(/api\.cloudflare\.com/.test(PROVIDERS.cloudflare.privacyText('api.cloudflare.com')) && /사진은 보내지 않아요/.test(PROVIDERS.cloudflare.privacyText('x')) && /청구/.test(PROVIDERS.openai.privacyText('api.openai.com')), 'text-only privacy notes');
+
+  ok(hasHangul('노을') && hasHangul('a 가 b') && hasHangul('ㅋㅋ') && !hasHangul('sunset') && !hasHangul('') && !hasHangul(null), 'hasHangul');
+  const asJson = (o) => ({ blob: new Blob([JSON.stringify(o)], { type: 'application/json' }), ctype: 'application/json' });
+  const calls = [];
+  const okRelay = async (prov, req) => { calls.push([prov, req]); return asJson({ result: { translated_text: 'a small sailboat' }, success: true }); };
+  const r1 = await translateToEnglish('작은 돛단배', {}, okRelay);
+  const sent = JSON.parse(await calls[0][1].body.text());
+  ok(r1.text === 'a small sailboat' && r1.translated === true && calls[0][0] === 'cloudflare' && calls[0][1].method === 'POST' && calls[0][1].path === '/accounts/{account}/ai/run/@cf/meta/m2m100-1.2b' && calls[0][1].contentType === 'application/json' && sent.source_lang === 'ko' && sent.target_lang === 'en' && sent.text === '작은 돛단배', 'translate: request shape + result');
+  const none = await translateToEnglish('already english', {}, async () => { throw new Error('must not be called'); });
+  ok(none.text === 'already english' && none.translated === false, 'translate: nothing to do without Hangul (no network call)');
+  ok((await translateToEnglish('   ', {}, okRelay)).text === '', 'translate: blank input');
+  const bad = [async () => asJson({ result: { translated_text: '여전히 한국어' } }), async () => asJson({ result: {} }), async () => ({ blob: new Blob(['<html>']), ctype: 'text/html' }), async () => { throw new AiError({ status: 400, code: 'bad_request' }); }, async () => asJson({ result: { translated_text: '   ' } })];
+  for (const [i, relay] of bad.entries()) { const r = await translateToEnglish('고양이', {}, relay); ok(r.text === '고양이' && r.translated === false, 'translate falls back to the original on failure #' + i); }
+  let rethrown = null; try { await translateToEnglish('고양이', {}, async () => { throw new AiError({ code: 'cancelled' }); }); } catch (e) { rethrown = e; }
+  ok(rethrown instanceof AiError && rethrown.info.code === 'cancelled', 'translate: cancellation is not swallowed');
+  const long = await translateToEnglish('가'.repeat(900), {}, async (p, req) => { calls.push([p, req]); return asJson({ result: { translated_text: 'x'.repeat(2000) } }); });
+  const lastBody = JSON.parse(await calls.at(-1)[1].body.text());
+  ok(lastBody.text.length === 500 && long.text.length === 800, 'translate: input capped at 500 chars, output at 800');
 }
 
 console.log(`\nAI unit tests: ${pass} passed, ${fail} failed`);

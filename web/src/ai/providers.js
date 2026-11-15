@@ -108,6 +108,40 @@ export function orderOpenRouterModels(list) {
 export const CF_MODELS = ['@cf/black-forest-labs/flux-2-klein-4b', '@cf/black-forest-labs/flux-2-klein-9b', '@cf/black-forest-labs/flux-2-dev'];
 export const CF_MODEL_RE = /^@cf\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
 
+// ------------------------------------------------------------ 문구만으로 그리는 모델(생성 전용) — 사진을 보지 못한다
+/** 유튜브에서 가장 많이 소개되는 무료 모델(FLUX.1 schnell, Cloudflare Workers AI). 입력은 문구뿐이라 사진을 보내지 않는다 */
+export const CF_GENERATE_MODELS = ['@cf/black-forest-labs/flux-1-schnell'];
+export const isCfGenerateModel = (m) => /flux-1-schnell|stable-diffusion-xl|dreamshaper|sdxl-lightning/i.test(String(m || ''));
+
+/** 모델별 동작: edit = 사진을 보고 고침 / generate = 문구만으로 그림(선택 안쪽을 새 그림으로 채움, 사진 미전송) */
+export function modelProfile(pid, model) {
+  const P = PROVIDERS[pid] || PROVIDERS.openai;
+  if (pid === 'cloudflare' && isCfGenerateModel(model)) return { mode: 'generate', usesMask: false, sizes: SIZES_FREE, noPhoto: true };
+  return { mode: 'edit', usesMask: P.usesMask, sizes: P.sizes, noPhoto: false };
+}
+
+const HANGUL = /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/;
+export const hasHangul = (s) => HANGUL.test(String(s || ''));
+
+/**
+ * 한국어 문구 → 영어 (Cloudflare m2m100, 무료). FLUX 같은 모델은 영어 문구에서 훨씬 잘 그린다.
+ * 실패하면 원문 그대로 진행(best-effort). relay 는 테스트용으로 바꿀 수 있다.
+ */
+export async function translateToEnglish(text, opts, relay = relayRaw) {
+  const src = String(text || '').trim();
+  if (!src || !HANGUL.test(src)) return { text: src, translated: false };
+  const body = new Blob([JSON.stringify({ text: src.slice(0, 500), source_lang: 'ko', target_lang: 'en' })], { type: 'application/json' });
+  try {
+    const { blob } = await relay('cloudflare', { method: 'POST', path: '/accounts/{account}/ai/run/@cf/meta/m2m100-1.2b', contentType: 'application/json', body }, opts);
+    const j = JSON.parse(await blob.text());
+    const out = j && j.result && (j.result.translated_text || j.result.translation);
+    if (typeof out === 'string' && out.trim() && !HANGUL.test(out)) return { text: out.trim().slice(0, 800), translated: true };
+  } catch (e) {
+    if (e instanceof AiError && e.info && e.info.code === 'cancelled') throw e;
+  }
+  return { text: src, translated: false };
+}
+
 export function parseCfModels(json) {
   const arr = json && Array.isArray(json.result) ? json.result : [];
   return arr.map((m) => String((m && (m.name || m.id)) || '')).filter((n) => CF_MODEL_RE.test(n) && /flux|inpaint|img2img|kontext|edit/i.test(n));
@@ -153,6 +187,12 @@ export const PROVIDERS = {
     },
     async buildEdit(o, imgs) { return buildEditRequest({ model: o.model, prompt: o.prompt, size: o.size.str, quality: o.quality, n: o.n }, imgs.image, imgs.mask); },
     async edit(req, opts) { return editImages('openai', req, opts); },
+    /** 문구만으로 새 이미지 (POST /images/generations) → Blob[] */
+    async generate(o, opts) {
+      const body = JSON.stringify({ model: o.model, prompt: String(o.prompt || '').slice(0, 4000), size: (o.size && o.size.str) || '1024x1024', quality: o.quality || 'medium', n: 1 });
+      return editImages('openai', { method: 'POST', path: '/images/generations', contentType: 'application/json', body: new Blob([body], { type: 'application/json' }) }, opts);
+    },
+    privacyText: (host) => t(`입력한 문구가 ${host} 로 전송돼요. 사진은 보내지 않아요. 요금은 내 API 계정에 청구돼요.`, `Your prompt is sent to ${host}. No photo is sent. Usage is billed to your own API account.`),
   },
 
   openrouter: {
@@ -206,7 +246,7 @@ export const PROVIDERS = {
     privacy: (host) => t(`선택한 영역과 그 주변 이미지, 입력한 문구가 ${host}(Workers AI) 로 전송돼요. ${COMMON_PRIVACY()} 하루 무료 한도를 넘으면 요청이 거부돼요.`, `The selected area with its surroundings and your prompt are sent to ${host} (Workers AI). ${COMMON_PRIVACY()} Requests are refused once the daily free allowance is used up.`),
     defaultBase: 'https://api.cloudflare.com/client/v4', customBase: false,
     extra: { id: 'account', label: () => t('계정 ID', 'Account ID'), placeholder: () => t('32자리 계정 ID', '32-character account ID'), check: (v) => /^[0-9a-fA-F]{32}$/.test(String(v || '').trim()) },
-    modelPresets: CF_MODELS, fallbackModel: CF_MODELS[0], autoModel: CF_MODELS[0],
+    modelPresets: CF_MODELS.concat(CF_GENERATE_MODELS), fallbackModel: CF_MODELS[0], autoModel: CF_MODELS[0], generateModel: CF_GENERATE_MODELS[0],
     async discover(opts) {
       const { blob } = await relayRaw('cloudflare', { method: 'GET', path: '/accounts/{account}/ai/models/search?per_page=50&search=flux' }, opts);
       let names = [];
@@ -230,6 +270,14 @@ export const PROVIDERS = {
       const { blob, ctype } = await relayRaw('cloudflare', req, opts);
       return parseCloudflareImage(blob, ctype);
     },
+    /** 문구만으로 그리기(FLUX.1 schnell 등) → Blob[]. 사진은 보내지 않는다 */
+    async generate(o, opts) {
+      if (!CF_MODEL_RE.test(o.model)) throw new AiError({ status: 404, code: 'model_not_found', message: 'invalid model name' });
+      const body = new Blob([JSON.stringify({ prompt: String(o.prompt || '').slice(0, 2000) })], { type: 'application/json' });
+      const { blob, ctype } = await relayRaw('cloudflare', { method: 'POST', path: `/accounts/{account}/ai/run/${o.model}`, contentType: 'application/json', body }, opts);
+      return parseCloudflareImage(blob, ctype);
+    },
+    privacyText: (host) => t(`입력한 문구(한국어는 영어로 번역해 보낼 수 있어요)가 ${host}(Workers AI) 로 전송돼요. 사진은 보내지 않아요. 하루 무료 한도를 넘으면 요청이 거부돼요.`, `Your prompt (Korean can be translated to English first) is sent to ${host} (Workers AI). No photo is sent. Requests are refused once the daily free allowance is used up.`),
   },
 };
 

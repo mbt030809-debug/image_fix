@@ -3,15 +3,15 @@
 import { h, icon, rafThrottle } from '../ui/dom.js';
 import { t } from '../i18n.js';
 import { setIn, uid } from '../store.js';
-import { Segmented, Chips, Slider, Btn, IconBtn, toast, confirmDialog } from '../ui/components.js';
+import { Segmented, Chips, Slider, Btn, IconBtn, toast } from '../ui/components.js';
 import { bridge } from '../bridge.js';
 import * as Drafts from '../drafts.js';
 import { newMask, rasterPolygon, rectPts, ellipsePts, combine, strokeOp, invertMask, bboxOf, growMask, contourSegments } from '../ai/selection.js';
-import { explainError } from '../ai/openai.js';
+import { explainError, MODEL_AUTO } from '../ai/openai.js';
 import { AiError } from '../ai/client.js';
-import { PROVIDERS, getProvider } from '../ai/providers.js';
+import { PROVIDERS, getProvider, modelProfile, translateToEnglish } from '../ai/providers.js';
 import { prepareRequest, makePatch, sentPreview } from '../ai/job.js';
-import { aiConfig, pcfg, resolveModel, openAiSettings, privacyNote, providerInfo, providerReady } from './aisettings.js';
+import { aiConfig, pcfg, resolveModel, openAiSettings, providerReady, ensureConsent } from './aisettings.js';
 
 const PRESETS = [
   { id: 'erase', ko: '물체 지우기', en: 'Remove object', pko: '선택한 부분의 물체를 지우고 주변 배경과 자연스럽게 이어 주세요.', pen: 'Remove the object in the selected area and fill it naturally to match the surrounding background.' },
@@ -20,6 +20,16 @@ const PRESETS = [
   { id: 'bg', ko: '배경 바꾸기', en: 'New background', pko: '배경을 해변 풍경으로 바꿔 주세요.', pen: 'Change the background to a beach scene.' },
   { id: 'clean', ko: '깔끔하게', en: 'Clean up', pko: '이 부분을 깨끗하고 선명하게 정리해 주세요. 잡티와 얼룩을 없애 주세요.', pen: 'Clean up this area: remove blemishes and stains and make it sharp and tidy.' },
   { id: 'add', ko: '물체 추가', en: 'Add object', pko: '이 부분에 작은 화분을 하나 추가해 주세요.', pen: 'Add a small potted plant here.' },
+];
+
+// 문구만으로 그리는 모델(사진을 보지 못함)용: 선택 안쪽에 들어갈 "내용"을 설명한다 (영어로 번역돼 전달됨)
+const GEN_PRESETS = [
+  { id: 'sky', ko: '맑은 하늘', en: 'Clear sky', pko: '구름이 몽글몽글한 맑고 파란 하늘', pen: 'A clear blue sky with soft fluffy clouds' },
+  { id: 'sunset', ko: '노을 하늘', en: 'Sunset', pko: '붉고 주황빛으로 물든 극적인 노을 하늘', pen: 'A dramatic orange and pink sunset sky' },
+  { id: 'grass', ko: '잔디밭', en: 'Grass', pko: '푸르고 촘촘한 잔디밭', pen: 'A lush green lawn' },
+  { id: 'water', ko: '바다 물결', en: 'Sea waves', pko: '잔잔한 푸른 바다 물결', pen: 'Calm blue sea water with gentle waves' },
+  { id: 'wall', ko: '벽돌 벽', en: 'Brick wall', pko: '오래된 붉은 벽돌 벽', pen: 'An old red brick wall' },
+  { id: 'flowers', ko: '꽃밭', en: 'Flowers', pko: '활짝 핀 알록달록한 꽃밭', pen: 'A field of blooming colorful flowers' },
 ];
 
 const G = 1024; // 선택 마스크 격자의 긴 변
@@ -42,6 +52,8 @@ export function open(ed, body) {
   let promptEl = null;
 
   const prov = () => getProvider(cfg.provider);
+  /** 지금 선택된 모델(자동이면 정해진 값 또는 마지막으로 확인한 값) — 요청 전에 동작 방식(편집/생성)을 알기 위해 */
+  const currentModel = (P) => { const pc = pcfg(cfg, P.id); return pc.model !== MODEL_AUTO ? ((pc.custom || '').trim() || pc.model) : (P.autoModel || pc.resolved || ''); };
   const note = (s) => h('p', { class: 'sheet-note' }, s);
   const sec = (s) => h('div', { class: 'sheet-sec' }, s);
   const save = () => ed.app.saveSettings();
@@ -219,8 +231,10 @@ export function open(ed, body) {
     promptEl = h('textarea', { class: 'field ai-prompt', rows: 3, maxlength: 1000, placeholder: t('예: 셔츠를 파란색으로 바꿔 주세요 / 이 물체를 지워 주세요', 'e.g. Make the shirt blue / Remove this object'), 'aria-label': t('AI에게 요청할 내용', 'What should the AI do?') });
     promptEl.value = S.prompt;
     promptEl.addEventListener('input', () => { S.prompt = promptEl.value; });
-    const presets = Chips({ label: t('예시 문구', 'Examples'), items: PRESETS.map((p) => ({ id: p.id, label: t(p.ko, p.en) })), onSelect: (id) => { const p = PRESETS.find((x) => x.id === id); S.prompt = t(p.pko, p.pen); promptEl.value = S.prompt; promptEl.focus(); } });
     const P = prov();
+    const M = modelProfile(P.id, currentModel(P));
+    const list = M.mode === 'generate' ? GEN_PRESETS : PRESETS;
+    const presets = Chips({ label: t('예시 문구', 'Examples'), items: list.map((p) => ({ id: p.id, label: t(p.ko, p.en) })), onSelect: (id) => { const p = list.find((x) => x.id === id); S.prompt = t(p.pko, p.pen); promptEl.value = S.prompt; promptEl.focus(); } });
     const quality = Segmented({ label: t('품질', 'Quality'), items: [{ id: 'low', label: t('빠름', 'Fast') }, { id: 'medium', label: t('보통', 'Normal') }, { id: 'high', label: t('고품질', 'High') }], value: cfg.quality, onChange: (v) => { cfg.quality = v; save(); } });
     const count = Segmented({ label: t('생성 개수', 'Variants'), items: [1, 2, 3].filter((n) => n <= P.maxN).map((n) => ({ id: String(n), label: String(n) })), value: String(Math.min(cfg.n, P.maxN)), onChange: (v) => { cfg.n = +v; save(); } });
     const ctx = Segmented({ label: t('주변 포함', 'Context'), items: [{ id: '0', label: t('좁게', 'Tight') }, { id: '1', label: t('보통', 'Normal') }, { id: '2', label: t('넓게', 'Wide') }], value: String(cfg.ctx), onChange: (v) => { cfg.ctx = +v; save(); } });
@@ -237,18 +251,23 @@ export function open(ed, body) {
       }
     }
     body.append(h('div', { class: 'row wrap', style: { justifyContent: 'space-between' } }, h('span', { class: 'sheet-note' }, t('제공자: ', 'Provider: ') + P.short + ' · ' + P.tag()), Btn(t('바꾸기', 'Change'), 'text', () => openSet(P.id))));
+    if (P.id === 'cloudflare') {
+      body.append(Segmented({ label: t('방식', 'Mode'), items: [{ id: 'edit', label: t('사진 보고 편집', 'Edit with photo') }, { id: 'generate', label: t('문구로 채우기', 'Fill from prompt') }], value: M.mode,
+        onChange: (v) => { const pc = pcfg(cfg, 'cloudflare'); if (v === 'generate') { pc.model = P.generateModel; pc.custom = P.generateModel; } else { pc.model = MODEL_AUTO; } save(); renderBody(); } }).el);
+      if (M.mode === 'generate') body.append(note(t('이 방식은 사진을 보지 않고 문구만으로 그려요. 선택 안쪽에 들어갈 내용을 설명해 주세요(예: 맑은 하늘, 잔디밭). 한국어는 영어로 번역해서 보내요. 사진은 전송되지 않아요.', 'This mode never sees your photo: it paints from the prompt alone. Describe what should appear inside the selection (e.g. clear sky, grass). Korean is translated to English first. No photo is sent.')));
+    }
     body.append(promptEl, presets.el);
     if (P.hasQuality) body.append(sec(t('품질', 'Quality')), quality.el);
     if (P.maxN > 1) body.append(sec(t('생성 개수 (개수만큼 요금이 늘어요)', 'Variants (cost grows with the count)')), count.el);
     body.append(sec(t('주변 포함 (넓을수록 어울리게 만들지만 결과가 덜 선명할 수 있어요)', 'Context (wider blends better but may look softer)')), ctx.el,
-      note(P.usesMask
+      note(M.mode === 'generate' ? t('결과는 선택 안쪽에만 합쳐져요. 사진과 무관하게 그려서 밝기·색이 어긋날 수 있어요. 마음에 안 들면 “다시 생성”을 눌러 보세요.', 'The result is blended only inside your selection. It is painted without seeing the photo, so lighting may not match; try "Regenerate".') : P.usesMask
         ? t('선택 영역과 주변만 전송하고, 결과는 선택 안쪽에만 합쳐져요. 취소해도 이미 시작된 요청은 요금이 청구될 수 있어요.', 'Only the selected area and its surroundings are sent, and the result is blended only inside your selection. Cancelling may not avoid charges for a request already started.')
         : t('선택 영역과 주변(편집할 곳을 마젠타로 표시한 사본 포함)만 전송하고, 결과는 선택 안쪽에만 합쳐져요. 무료 모델은 결과가 들쭉날쭉할 수 있어요. 마음에 안 들면 “다시 생성”을 눌러 보세요.', 'Only the selected area and its surroundings (plus a copy with the edit area marked in magenta) are sent, and the result is blended only inside your selection. Free models can be hit-or-miss; try "Regenerate".')),
       Btn(t('AI 설정', 'AI settings'), 'text', () => openSet(P.id), 'key-round'));
   }
 
   // ------------------------------------------------------------ 진행 중 / 결과
-  const PHASE = () => ({ prepare: t('이미지 준비 중…', 'Preparing image…'), upload: t('서버로 보내는 중…', 'Uploading…'), wait: t('AI가 작업 중…', 'AI is working…'), finish: t('결과를 합치는 중…', 'Blending the result…') });
+  const PHASE = () => ({ translate: t('영어로 번역 중…', 'Translating to English…'), prepare: t('이미지 준비 중…', 'Preparing image…'), upload: t('서버로 보내는 중…', 'Uploading…'), wait: t('AI가 작업 중…', 'AI is working…'), finish: t('결과를 합치는 중…', 'Blending the result…') });
   let phaseEl = null;
   function updatePhase() {
     if (!phaseEl || !job) return;
@@ -260,8 +279,8 @@ export function open(ed, body) {
     phaseEl = h('div', { class: 'ai-phase num', 'aria-live': 'polite' });
     const box = h('div', { class: 'ai-busy' }, h('div', { class: 'spinner', role: 'progressbar', 'aria-label': t('AI 작업 중', 'AI working') }), phaseEl);
     body.append(box);
-    if (job && job.prep) body.append(sentBox(job.prep));
-    body.append(note(t('보통 10~60초 걸려요. 이 화면을 벗어나지 말고 기다려 주세요. 선택한 영역과 주변만 전송했어요.', 'Usually 10–60 seconds. Please stay on this screen. Only the selected area and its surroundings were sent.')));
+    if (job && job.prep && !job.prep.noPhoto) body.append(sentBox(job.prep));
+    body.append(note(job && job.prep && job.prep.noPhoto ? t('보통 5~30초 걸려요. 이 화면을 벗어나지 말고 기다려 주세요. 사진은 보내지 않고 문구만 전송했어요.', 'Usually 5–30 seconds. Please stay on this screen. No photo was sent, only your prompt.') : t('보통 10~60초 걸려요. 이 화면을 벗어나지 말고 기다려 주세요. 선택한 영역과 주변만 전송했어요.', 'Usually 10–60 seconds. Please stay on this screen. Only the selected area and its surroundings were sent.')));
     updatePhase();
   }
   function sentBox(prep) {
@@ -305,7 +324,7 @@ export function open(ed, body) {
     if (!review || closed) return;
     const v = review.variants[S.variant];
     const p = review.prep.place;
-    const layer = { id: review.layerId, t: 'image', asset: v.key, x: p.x, y: p.y, w: p.w, rot: 0, opacity: review.opacity, lock: true, ai: { prompt: S.prompt.slice(0, 200), model: review.model, provider: review.provider, ts: Date.now() } };
+    const layer = { id: review.layerId, t: 'image', asset: v.key, x: p.x, y: p.y, w: p.w, rot: 0, opacity: review.opacity, lock: true, ai: { prompt: S.prompt.slice(0, 200), model: review.model, provider: review.provider, mode: review.mode, ts: Date.now() } };
     ed.preview((d) => setIn(d, 'layers', [...d.layers, layer]));
   }
   function dropVariants() { if (review) { review.variants.forEach((v) => ed.dropAsset(v.key)); } }
@@ -332,11 +351,6 @@ export function open(ed, body) {
   }
   function regenerate() { if (review) { ed.store.revert(); dropVariants(); review = null; } S.phase = 'select'; onGenerate(true); }
 
-  async function askConsent(P) {
-    const v = await confirmDialog({ title: t('AI 서버로 사진 일부를 보내요', 'Send part of your photo to an AI server'), body: privacyNote(P.id), actions: [{ label: t('취소', 'Cancel'), value: 'no' }, { label: t('동의하고 계속', 'Agree & continue'), value: 'yes', kind: 'filled' }] });
-    return v === 'yes';
-  }
-
   async function onGenerate(skipChecks) {
     S.msg = null;
     if (S.phase !== 'select') return;
@@ -345,11 +359,8 @@ export function open(ed, body) {
     if (!bridge.ai.available()) { toast(t('AI 요청은 앱(APK)에서만 쓸 수 있어요', 'AI requests work only in the app (APK)')); return; }
     const P = prov();
     if (!providerReady(P.id)) { S.tab = 'ask'; renderBody(); openAiSettings(ed.app, { provider: P.id, onClose: renderBody }); return; }
-    const host = P.host(providerInfo(P.id));
-    if (!skipChecks && cfg.consents[P.id] !== host) {
-      if (!(await askConsent(P))) return;
-      cfg.consents[P.id] = host; save();
-    }
+    void skipChecks;
+    if (!(await ensureConsent(ed.app, P, modelProfile(P.id, currentModel(P)).noPhoto))) return;
     if (closed) return;
     runJob();
   }
@@ -364,17 +375,27 @@ export function open(ed, body) {
     let variants = [];
     try {
       const model = await resolveModel(ed.app, P.id);
+      const M = modelProfile(P.id, model); // edit: 사진을 보고 고침 / generate: 문구만으로 그림(사진 미전송)
+      const gen = M.mode === 'generate';
       if (ctl.signal.aborted) throw new AiError({ code: 'cancelled' });
-      const prep = await prepareRequest(ed, { mask: eff, w: mw, h: mh }, { ctx: cfg.ctx, feather: cfg.feather, provider: P });
+      const prep = await prepareRequest(ed, { mask: eff, w: mw, h: mh }, { ctx: gen ? 0 : cfg.ctx, feather: cfg.feather, provider: M });
       if (ctl.signal.aborted || closed) throw new AiError({ code: 'cancelled' });
       job.prep = prep; renderBody();
-      const req = await P.buildEdit({ model, prompt: S.prompt, size: prep.size, quality: cfg.quality, n: Math.min(cfg.n, P.maxN), outputs: (pcfg(cfg, P.id).meta || {})[model] }, { image: prep.imageBlob, mask: prep.maskBlob, marked: prep.markedBlob });
-      const blobs = await P.edit(req, { signal: ctl.signal, onPhase: (p) => { if (job) job.phase = p; } });
+      const onPhase = (p) => { if (job) job.phase = p; };
+      let blobs;
+      if (gen) {
+        let text = S.prompt;
+        if (cfg.translate !== false) { job.phase = 'translate'; text = (await translateToEnglish(S.prompt, { signal: ctl.signal })).text; }
+        blobs = await P.generate({ model, prompt: text }, { signal: ctl.signal, onPhase });
+      } else {
+        const req = await P.buildEdit({ model, prompt: S.prompt, size: prep.size, quality: cfg.quality, n: Math.min(cfg.n, P.maxN), outputs: (pcfg(cfg, P.id).meta || {})[model] }, { image: prep.imageBlob, mask: prep.maskBlob, marked: prep.markedBlob });
+        blobs = await P.edit(req, { signal: ctl.signal, onPhase });
+      }
       if (job) job.phase = 'finish';
       updatePhase();
-      for (const b of blobs) { const cv = await makePatch(b, prep, { feather: cfg.feather, tone: cfg.tone }); variants.push({ cv, key: ed.addCanvasAsset(cv) }); }
+      for (const b of blobs) { const cv = await makePatch(b, prep, { feather: cfg.feather, tone: gen ? false : cfg.tone, cover: gen }); variants.push({ cv, key: ed.addCanvasAsset(cv) }); }
       if (ctl.signal.aborted || closed) throw new AiError({ code: 'cancelled' });
-      review = { prep, variants, model, provider: P.id, layerId: uid(), opacity: 1 };
+      review = { prep, variants, model, provider: P.id, mode: M.mode, layerId: uid(), opacity: 1 };
       variants = [];
       S.variant = 0; S.phase = 'review'; job = null; stopTimer();
       previewVariant(); renderAll();

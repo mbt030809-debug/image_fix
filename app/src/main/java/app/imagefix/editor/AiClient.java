@@ -106,6 +106,7 @@ final class AiClient {
     static {
         PROFILES.put("openai", new Profile("openai", "Authorization", "Bearer ", new String[0][],
                 new Route("POST", "^/images/edits$", MULTIPART, "images"),
+                new Route("POST", "^/images/generations$", JSON_TYPE, "images"), // 문구만으로 새 이미지(사진을 보내지 않음)
                 new Route("GET", "^/models$", null, "models")));
         PROFILES.put("openrouter", new Profile("openrouter", "Authorization", "Bearer ", new String[][]{{"X-Title", "ImageFix"}},
                 new Route("POST", "^/chat/completions$", JSON_TYPE, "raw"),
