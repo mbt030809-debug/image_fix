@@ -16,10 +16,11 @@ const init = () => {
   try { started = sessionStorage.getItem('t_started'); sessionStorage.setItem('t_started', '1'); } catch (e) { /* noop */ }
   let pending = started ? 0 : 1;
   const mkProv = () => ({ key: null, hint: '', extra: '', prot: 'hw', unreadable: false });
-  const prov = { cloudflare: mkProv(), modelscope: mkProv(), gemini: mkProv(), fal: mkProv() };
+  const prov = { cloudflare: mkProv(), modelscope: mkProv(), gemini: mkProv(), fal: mkProv(), deapi: mkProv() };
   const S = window.__ai = {
     log: [], specs: [], mode: 'ok', tr: 'ok', jobs: {}, results: {}, delay: 600, setKeyCalls: [], cfBinary: false, keyMode: 'ok', selfTest: 'hw=ok sw=ok', prov,
     cfModels: ['@cf/black-forest-labs/flux-2-klein-4b', '@cf/black-forest-labs/flux-2-dev', '@cf/meta/llama-3.1-8b-instruct'],
+    dpMode: 'ok', // deAPI: ok | url | err
     gmMode: 'ok', // Gemini: ok | text | blocked
     hfMode: 'ok', // fal.ai: ok | url(fal 주소로 답함) | gated(403 권한 없음)
     msMode: 'ok', // ModelScope: ok | fail | noimage | notask | dlhtml
@@ -32,11 +33,12 @@ const init = () => {
   const ROUTES = {
     cloudflare: [['POST', /^\/accounts\/\{account\}\/ai\/run\/@cf\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/, /^(application\/json|multipart\/form-data; boundary=)/], ['GET', /^\/accounts\/\{account\}\/ai\/models\/search$/, null]],
     gemini: [['POST', /^\/models\/[A-Za-z0-9][A-Za-z0-9._-]{0,60}:generateContent$/, /^application\/json$/], ['GET', /^\/models$/, null]],
+    deapi: [['POST', /^\/images\/edits$/, /^multipart\/form-data; boundary=/], ['GET', /^\/models$/, null]],
     fal: [['POST', /^\/fal-ai\/flux-lora-fill$/, /^application\/json$/]],
     modelscope: [['POST', /^\/images\/generations$/, /^application\/json$/], ['GET', /^\/tasks\/[A-Za-z0-9][A-Za-z0-9._-]{5,79}$/, null], ['GET', /^\/models$/, null]],
   };
   /** 결과 이미지 내려받기 주소 검사(네이티브 checkResultUrl 과 같은 규칙): https · 사용자 정보/포트/조각 없음 · 허용 도메인 */
-  const HOSTS = { modelscope: /^([a-z0-9-]+\.)*(aliyuncs\.com|modelscope\.cn|modelscope\.ai)$/, fal: /^([a-z0-9-]+\.)*(fal\.media|fal\.run)$/ };
+  const HOSTS = { deapi: /^([a-z0-9-]+\.)*deapi\.ai$/, modelscope: /^([a-z0-9-]+\.)*(aliyuncs\.com|modelscope\.cn|modelscope\.ai)$/, fal: /^([a-z0-9-]+\.)*(fal\.media|fal\.run)$/ };
   const urlOk = (raw, provider) => {
     let u; try { u = new URL(String(raw)); } catch (e) { return false; }
     return HOSTS[provider] && u.protocol === 'https:' && !u.username && !u.password && !u.port && !u.hash
@@ -123,8 +125,21 @@ const init = () => {
     if (S.mode === 'e401' && (route === '/models' || route.endsWith('/ai/models/search'))) return fail(j, 401, 'invalid_api_key', 'Invalid token');
     if (p === 'modelscope' && route === '/models') { await sleep(40); return finishJson(j, id, { object: 'list', data: [{ id: 'Qwen/Qwen-Image-Edit' }] }); }
     if (p === 'cloudflare' && route.endsWith('/ai/models/search')) { await sleep(30); return finishJson(j, id, { result: S.cfModels.map((name) => ({ name })), success: true, errors: [], messages: [] }); }
+    if (p === 'deapi' && route === '/models') { await sleep(30); return finishJson(j, id, { object: 'list', data: [{ id: 'qwen-image-edit' }, { id: 'flux-kontext-dev' }] }); }
     if (p === 'gemini' && route === '/models') { await sleep(30); return finishJson(j, id, { models: [{ name: 'models/gemini-2.5-flash-image' }, { name: 'models/gemini-2.5-pro' }, { name: 'models/gemini-3-pro-image-preview' }] }); }
 
+    // ------------------------------------------------------------ deAPI: OpenAI 호환 /images/edits (multipart: model · prompt · image = 표시한 사진 1장)
+    if (p === 'deapi') {
+      const fd0 = await new Response(new Blob([decodeChunks(j)]), { headers: { 'content-type': j.spec.type } }).formData();
+      const A0 = await bmpOf(fd0.get('image')); const orig0 = dataOf(A0), region0 = magentaMask(orig0);
+      S.log.push({ provider: p, kind: 'edit', path: String(j.spec.path), model: String(fd0.get('model')), prompt: String(fd0.get('prompt')), fields: [...fd0.keys()].join(), imgW: A0.width, imgH: A0.height, transparent: region0.cnt, bbox: region0.bbox });
+      if (!(await waitOrCancel(j))) return;
+      if (S.dpMode === 'err') return finishJson(j, id, { error: { message: 'model not found: ' + fd0.get('model'), code: 'model_not_found' } });
+      if (modeFail(j, p)) return;
+      const out0 = await toPng(paintResult(orig0, region0, A0.width, A0.height));
+      if (S.dpMode === 'url') { const url = `https://img.deapi.ai/out/${id}.png`; S.msImages[url] = out0; return finishJson(j, id, { data: [{ url }] }); }
+      return finishJson(j, id, { data: [{ b64_json: out0 }] });
+    }
     // ------------------------------------------------------------ Gemini: generateContent
     if (p === 'gemini') {
       const body = JSON.parse(new TextDecoder().decode(decodeChunks(j)));

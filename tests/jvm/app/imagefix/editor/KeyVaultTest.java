@@ -114,7 +114,7 @@ public class KeyVaultTest {
         JSONObject jp = new JSONObject(info).getJSONObject("providers").getJSONObject("gemini");
         ok(!jp.getBoolean("hasKey") && jp.getBoolean("readable") && "".equals(jp.getString("prot")) && new JSONObject(info).getInt("v") == 3, "info v3 lists gemini (no key yet)");
         ok(new JSONObject(info).getJSONObject("providers").has("fal") && !new JSONObject(info).getJSONObject("providers").has("pollinations"), "fal listed, pollinations gone");
-        ok(new JSONObject(info).getJSONObject("providers").length() == 4 && !new JSONObject(info).getJSONObject("providers").has("openai") && !new JSONObject(info).getJSONObject("providers").has("openrouter"), "exactly cloudflare / modelscope / gemini / fal");
+        ok(new JSONObject(info).getJSONObject("providers").length() == 5 && !new JSONObject(info).getJSONObject("providers").has("openai") && !new JSONObject(info).getJSONObject("providers").has("openrouter"), "exactly cloudflare / modelscope / gemini / fal / deapi");
         ok(!hw2.file.exists() && !sw.file.exists(), "the other tiers are not even touched when hw works");
         ok("hw=ok sw=ok".equals(v.selfTest()), "selfTest ok");
 

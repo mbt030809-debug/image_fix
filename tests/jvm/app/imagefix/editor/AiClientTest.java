@@ -158,6 +158,9 @@ public class AiClientTest {
                         reply(x, 200, "{\"images\":[{\"url\":\"data:image/png;base64,QUJD\",\"content_type\":\"image/png\"}]}");
                     } else if (p.startsWith("/hf403/")) {
                         reply(x, 403, "{\"error\":\"Access to model black-forest-labs/FLUX.1-Fill-dev is restricted (gated)\"}");
+                    } else if (p.equals("/dp/images/edits")) {
+                        rec("dp", x, body);
+                        reply(x, 200, "{\"data\":[{\"b64_json\":\"QUJD\"}]}");
                     } else if (p.equals("/ms/v1/images/generations")) {
                         rec("msSubmit", x, body);
                         reply(x, 200, "{\"task_id\":\"task-abc123456\",\"request_id\":\"r1\"}");
@@ -359,6 +362,25 @@ public class AiClientTest {
         ok(hh != null && "Key hf_test_token_6666".equals(hh.getFirst("Authorization")) && Arrays.equals(B.get("hf"), hbody), "Key authorization + body intact");
         ch.release(hfid);
         expectErrorWith(new AiClient(new Cfg().with("fal", root + "/hf403", "hf_x", null)), "fal", "/fal-ai/flux-lora-fill", 403, "http_403", "gated");
+
+        // ---------------------------------------------------------------- deAPI (OpenAI 호환 /images/edits)
+        System.out.println("▶ deAPI: POST /images/edits (multipart)");
+        AiClient cd = new AiClient(new Cfg().with("deapi", root + "/dp", "deapi-key-77777", null));
+        ok(AiClient.knownProvider("deapi") && AiClient.needsKey("deapi"), "deapi is a provider that needs a key");
+        ok("ERR:type".equals(cd.begin("{\"provider\":\"deapi\",\"method\":\"POST\",\"path\":\"/images/edits\",\"type\":\"application/json\",\"len\":3}")), "deapi: edits needs multipart");
+        for (String bad : new String[]{"/images/generations", "/v1/images/edits", "/images/edits/x", "/chat/completions"})
+            ok("ERR:path".equals(cd.begin("{\"provider\":\"deapi\",\"method\":\"POST\",\"path\":\"" + bad + "\",\"type\":\"" + MP + "\",\"len\":3}")), "deapi: rejects " + bad);
+        byte[] dbody = "--x\r\nhello\r\n".getBytes(UTF8);
+        String did = cd.begin("{\"provider\":\"deapi\",\"method\":\"POST\",\"path\":\"/images/edits\",\"type\":\"" + MP + "\",\"len\":" + dbody.length + "}");
+        ok(did.startsWith("a"), "deapi begin ok");
+        cd.chunk(did, Base64.getEncoder().encodeToString(dbody));
+        cd.send(did);
+        JSONObject dpst = waitDone(cd, did, 6000);
+        ok("done".equals(dpst.optString("state")) && new String(cd.result(did, 0), UTF8).contains("b64_json"), "deapi JSON result kept raw: " + dpst);
+        Headers dph = H.get("dp");
+        ok(dph != null && "Bearer deapi-key-77777".equals(dph.getFirst("Authorization")) && String.valueOf(dph.getFirst("Content-Type")).startsWith("multipart/form-data") && Arrays.equals(B.get("dp"), dbody) && "/dp/images/edits".equals(U.get("dp")), "bearer key + multipart body intact");
+        cd.release(did);
+        ok(AiClient.checkResultUrl(AiClient.PROFILES.get("deapi"), "https://img.deapi.ai/x/y.png?sig=1") != null && AiClient.checkResultUrl(AiClient.PROFILES.get("deapi"), "https://deapi.ai.evil.com/x.png") == null && AiClient.checkResultUrl(AiClient.PROFILES.get("deapi"), "https://x.aliyuncs.com/x.png") == null, "result download only from deapi.ai hosts");
 
         // ---------------------------------------------------------------- ModelScope (비동기 작업 + 결과 내려받기)
         System.out.println("▶ ModelScope: submit → poll → download");

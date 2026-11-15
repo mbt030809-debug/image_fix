@@ -138,6 +138,11 @@ final class AiClient {
         PROFILES.put("fal", new Profile("fal", "Authorization", "Key ", true,
                 Pattern.compile("^([a-z0-9-]+\\.)*(fal\\.media|fal\\.run)$"),
                 new Route("POST", "^/fal-ai/flux-lora-fill$", JSON_TYPE)));
+        // deAPI(deapi.ai) OpenAI 호환 면: POST /v1/images/edits (multipart: model · prompt · image), 결과는 b64_json 또는 deapi.ai 주소
+        PROFILES.put("deapi", new Profile("deapi", "Authorization", "Bearer ", true,
+                Pattern.compile("^([a-z0-9-]+\\.)*deapi\\.ai$"),
+                new Route("POST", "^/images/edits$", MULTIPART),
+                new Route("GET", "^/models$", null)));
         // API-Inference: 이미지 생성은 비동기 작업(POST 로 task_id → GET 으로 상태 확인 → 결과 이미지 주소 내려받기)
         PROFILES.put("modelscope", new Profile("modelscope", "Authorization", "Bearer ", true,
                 Pattern.compile("^([a-z0-9-]+\\.)*(aliyuncs\\.com|modelscope\\.cn|modelscope\\.ai)$"),

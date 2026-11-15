@@ -48,7 +48,7 @@ final class KeyVault implements AiClient.Config {
     private static final String PREFS = "imagefix_ai";
     private static final Charset UTF8 = Charset.forName("UTF-8");
     private static final Pattern KEY_OK = Pattern.compile("^[\\x21-\\x7e]{8,400}$");
-    static final String[] PROVIDERS = {"cloudflare", "modelscope", "gemini", "fal"};
+    static final String[] PROVIDERS = {"cloudflare", "modelscope", "gemini", "fal", "deapi"};
 
     /** 문자열 저장소 (실기기: SharedPreferences, 테스트: 메모리) */
     interface Store {
@@ -116,6 +116,7 @@ final class KeyVault implements AiClient.Config {
     static String defaultBase(String provider) {
         if ("gemini".equals(provider)) return "https://generativelanguage.googleapis.com/v1beta";
         if ("fal".equals(provider)) return "https://fal.run";
+        if ("deapi".equals(provider)) return "https://oai.deapi.ai/v1";
         if ("modelscope".equals(provider)) return "https://api-inference.modelscope.cn/v1";
         return "https://api.cloudflare.com/client/v4";
     }

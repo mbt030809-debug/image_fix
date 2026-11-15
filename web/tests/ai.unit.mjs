@@ -10,7 +10,7 @@ import { buildMultipart, explainError, cleanKey, MODEL_AUTO } from '../src/ai/co
 import {
   PROVIDERS, PROVIDER_IDS, getProvider, SIZES_FREE, SIZES_CF, CF_MODELS, CF_GENERATE_MODELS, CF_MODEL_RE, isCfGenerateModel, modelProfile, hasHangul, translateToEnglish, parseAccountId,
   base64ToBlob, sniffType, ensureImageBlob, instruct, parseCfModels, parseCloudflareImage, dataUrlToBlob, instructOne, GM_MODELS, GM_MODEL_RE, parseGeminiImage, parseGeminiModels, FAL_MODEL, parseFalImage, MS_EDIT_TASK,
-  MS_MODELS, MS_MODEL_RE, parseModelScopeTask, modelscopeGenerate, sleepAbortable,
+  DEAPI_MODELS, DEAPI_MODEL_RE, parseOpenAiImage, MS_MODELS, MS_MODEL_RE, parseModelScopeTask, modelscopeGenerate, sleepAbortable,
 } from '../src/ai/providers.js';
 import { AiError } from '../src/ai/client.js';
 import { aiConfig, pcfg } from '../src/tools/aisettings.js';
@@ -498,15 +498,38 @@ section('providers: ModelScope (async task + download)');
   ok(rG.calls[0].req.tt === undefined, 'plain generation requests carry no task type');
 }
 
+section('providers: deAPI (OpenAI-compatible edits)');
+{
+  const D = PROVIDERS.deapi;
+  const marked = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 9, 9, 9])], { type: 'image/png' });
+  ok(DEAPI_MODELS.every((m) => DEAPI_MODEL_RE.test(m)) && !DEAPI_MODEL_RE.test('') && !DEAPI_MODEL_RE.test('a b') && !DEAPI_MODEL_RE.test('../x?'), 'model name check');
+  const req = await D.buildEdit({ model: 'qwen-image-edit', prompt: '하늘을 바꿔 주세요', size: SIZES_FREE[0] }, { image: new Blob(['x']), marked });
+  const fd = await new Response(req.body, { headers: { 'content-type': req.contentType } }).formData();
+  ok(req.method === 'POST' && req.path === '/images/edits' && /^multipart\/form-data; boundary=/.test(req.contentType) && fd.get('model') === 'qwen-image-edit' && /magenta/.test(String(fd.get('prompt'))) && /하늘을 바꿔 주세요$/.test(String(fd.get('prompt'))) && fd.get('image').name === 'image.png' && fd.get('image').size === marked.size, 'multipart: model + prompt + the marked photo as "image"');
+  const bad = await throwsAi(() => D.buildEdit({ model: '../x?', prompt: 'x', size: SIZES_FREE[0] }, { image: marked, marked }));
+  ok(bad instanceof AiError && bad.info.status === 404, 'malformed model rejected');
+  const r1 = scripted([jsonRes({ data: [{ b64_json: PNG }] })]);
+  const o1 = await D.edit(req, {}, r1);
+  ok(o1.length === 1 && o1[0].type === 'image/png' && r1.calls[0].provider === 'deapi' && r1.calls[0].req === req, 'b64_json result');
+  const r2 = scripted([jsonRes({ data: [{ url: 'https://img.deapi.ai/x/y.png' }] }), imgRes()]);
+  const ph = [];
+  const o2 = await D.edit(req, { onPhase: (p) => ph.push(p) }, r2);
+  ok(o2.length === 1 && r2.calls[1].req.method === 'GET' && r2.calls[1].req.url === 'https://img.deapi.ai/x/y.png' && r2.calls[1].provider === 'deapi' && ph.join() === 'download', 'url result is downloaded through the relay');
+  const e1 = await throwsAi(() => D.edit(req, {}, scripted([jsonRes({ error: { message: 'model not found', code: 'model_not_found' } })])));
+  const e2 = await throwsAi(() => D.edit(req, {}, scripted([jsonRes({ data: [] })])));
+  const e3 = await throwsAi(() => D.edit(req, {}, scripted([{ blob: new Blob(['<html>'], { type: 'text/html' }), ctype: 'text/html' }])));
+  ok(e1.info.code === 'model_not_found' && /model not found/.test(e1.info.message) && e2.info.code === 'no_image' && e3.info.code === 'bad_response', 'API error / empty data / not JSON');
+}
+
 section('providers: registry / sizes / config');
 {
-  ok(PROVIDER_IDS.join() === 'cloudflare,modelscope,gemini,fal', 'provider ids: Cloudflare, ModelScope, Gemini, fal.ai');
+  ok(PROVIDER_IDS.join() === 'cloudflare,modelscope,gemini,fal,deapi', 'provider ids: Cloudflare, ModelScope, Gemini, fal.ai, deAPI');
   ok(!('openai' in PROVIDERS) && !('openrouter' in PROVIDERS) && !('pollinations' in PROVIDERS), 'OpenAI / OpenRouter / Pollinations are gone');
   for (const id of PROVIDER_IDS) {
     const P = PROVIDERS[id];
     ok(P.id === id && typeof P.free === 'boolean' && typeof P.name() === 'string' && typeof P.tag() === 'string' && typeof P.desc() === 'string' && typeof P.howto() === 'string' && typeof P.host() === 'string' && typeof P.privacy('h') === 'string' && typeof P.privacyText('h') === 'string' && P.sizes.length === 3 && Array.isArray(P.modelPresets), 'provider interface: ' + id);
     const all = [P.name(), P.tag(), P.desc(), P.howto(), P.privacy('h'), P.privacyText('h')].join(' ');
-    ok(!/openai|openrouter|gpt-image/i.test(all), 'no stale OpenAI/OpenRouter wording: ' + id);
+    ok(!/openai|openrouter|gpt-image/i.test(all.replace(/OpenAI[- ]?(compatible|호환)/gi, '')), 'no stale OpenAI/OpenRouter wording: ' + id);
   }
   const { cloudflare: CF, modelscope: MS, gemini: GM, fal: HF } = PROVIDERS;
   ok(PROVIDER_IDS.every((id) => !PROVIDERS[id].noKey && !PROVIDERS[id].genOnly), 'every provider needs a key; none is generation-only');

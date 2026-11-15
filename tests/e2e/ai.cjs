@@ -52,7 +52,7 @@ let HH = null;
   await h.shot('a2_ask');
   await page.click('.sheet-head .btn >> text=AI로 수정'); await page.waitForTimeout(200);
   check('running without key opens AI settings', (await page.locator('.msheet').count()) === 1 && (await page.locator('.msheet h2').first().textContent()) === 'AI 설정');
-  check('settings offer exactly Cloudflare / ModelScope / Gemini / fal.ai (OpenAI, OpenRouter, Pollinations are gone)', (await page.locator('.msheet .chip[data-id]').evaluateAll((els) => els.map((e) => e.dataset.id))).join() === 'cloudflare,modelscope,gemini,fal');
+  check('settings offer exactly Cloudflare / ModelScope / Gemini / fal.ai (OpenAI, OpenRouter, Pollinations are gone)', (await page.locator('.msheet .chip[data-id]').evaluateAll((els) => els.map((e) => e.dataset.id))).join() === 'cloudflare,modelscope,gemini,fal,deapi');
   await page.fill('.msheet input[name=imagefix-ai-account]', ACC);
   await page.fill('.msheet input[type=password]', 'cf-token-abcdef123456');
   await page.click('.msheet .btn >> text=키 저장'); await page.waitForTimeout(150);

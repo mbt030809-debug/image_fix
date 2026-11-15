@@ -1,4 +1,4 @@
-// 제공자별 E2E (영역 수정 도구): Gemini(편집 / 문구로 채우기 / 모델 지정 / 오류) · ModelScope Qwen-Image-Edit(작업 만들기 → 확인 → 내려받기, 표시한 사진 1장) ·
+// 제공자별 E2E (영역 수정 도구) — deAPI 포함: Gemini(편집 / 문구로 채우기 / 모델 지정 / 오류) · ModelScope Qwen-Image-Edit(작업 만들기 → 확인 → 내려받기, 표시한 사진 1장) ·
 // fal.ai FLUX.1 Fill(진짜 흰색 마스크, data URI / fal 주소 결과, 권한 오류) · 제공자 전환 · 옛 설정(OpenAI/OpenRouter/Pollinations) 정리.
 const path = require('path');
 const { launch, close, waitIdle, selTool } = require('./lib.cjs');
@@ -47,7 +47,7 @@ let HH = null;
   console.log('▶ Gemini (사진 편집 · 문구로 채우기)');
   check('with nothing set up the card offers only "key setup" (no keyless provider any more)', (await page.locator('.ai-setup .btn').count()) === 1 && (await page.locator('.ai-setup .btn >> text=키 설정').count()) === 1);
   await openSettingsOn('gemini');
-  check('settings list the four providers with their tags', (await page.locator('.msheet .chip[data-id]').evaluateAll((els) => els.map((e) => e.dataset.id))).join() === 'cloudflare,modelscope,gemini,fal' && /하루 무료/.test(await chip('cloudflare').textContent()) && /Qwen/.test(await chip('modelscope').textContent()) && /내 API 키/.test(await chip('gemini').textContent()) && /진짜 마스크/.test(await chip('fal').textContent()));
+  check('settings list the four providers with their tags', (await page.locator('.msheet .chip[data-id]').evaluateAll((els) => els.map((e) => e.dataset.id))).join() === 'cloudflare,modelscope,gemini,fal,deapi' && /하루 무료/.test(await chip('cloudflare').textContent()) && /Qwen/.test(await chip('modelscope').textContent()) && /내 API 키/.test(await chip('gemini').textContent()) && /진짜 마스크/.test(await chip('fal').textContent()));
   check('Gemini tab: API key only (no account ID), model selection, connection test', (await page.locator('.msheet input[name=imagefix-ai-account]').count()) === 0 && (await page.locator('.msheet input[type=password]').getAttribute('placeholder')) === 'Gemini API 키 (AIza…)' && /gemini-2\.5-flash-image/.test(await page.locator('.msheet').last().textContent()) && (await page.locator('.msheet .btn >> text=연결 테스트').count()) === 1);
   await saveToken('AIzaSyTestKey-abcdef123456');
   check('key saved natively in its own slot', (await page.locator('.msheet .kv b').textContent()).includes('3456') && JSON.stringify(await page.evaluate(() => window.__ai.setKeyCalls.at(-1))) === JSON.stringify(['gemini', 'key', '']));
@@ -200,6 +200,36 @@ let HH = null;
   await runToSelect();
   check('403 → permission message with a settings shortcut', /권한/.test(await errText()) && (await page.locator('.sheet .btn >> text=AI 설정 열기').count()) === 1);
   await page.evaluate(() => { window.__ai.hfMode = 'ok'; });
+
+  // ---------------------------------------------------------------- 3b) deAPI · OpenAI 호환 이미지 편집
+  console.log('▶ deAPI · 이미지 편집');
+  await openSettingsOn('deapi');
+  check('deAPI tab: key only, model selection, connection test', (await page.locator('.msheet input[type=password]').getAttribute('placeholder')) === 'deAPI API 키' && (await page.locator('.msheet input[name=imagefix-ai-account]').count()) === 0 && (await page.locator('.msheet .btn >> text=연결 테스트').count()) === 1 && /qwen-image-edit/.test(await page.locator('.msheet').last().textContent()));
+  await saveToken('deapi-testkey-1234567890');
+  check('key saved natively in its own slot', (await page.locator('.msheet .kv b').textContent()).includes('7890') && JSON.stringify(await page.evaluate(() => window.__ai.setKeyCalls.at(-1))) === JSON.stringify(['deapi', 'key', '']));
+  await page.click('.msheet .btn >> text=연결 테스트'); await page.waitForTimeout(700);
+  check('connection test lists the models', /qwen-image-edit/.test(await page.locator('.msheet .ai-msg').textContent()) && /flux-kontext-dev/.test(await page.locator('.msheet .ai-msg').textContent()));
+  await closeModal();
+  check('provider row shows deAPI; one marked photo (no mode switch)', /deAPI/.test(await providerRow()) && (await page.locator('.seg button >> text=문구로 채우기').count()) === 0);
+  await lasso(); await askTab();
+  await run();
+  await consent(['oai.deapi.ai', 'deAPI', '주변 이미지']);
+  await waitPhase('busy', 5000);
+  await waitPhase('review', 40000); await page.waitForTimeout(250);
+  const dp = await last('edit', 'deapi');
+  check('multipart /images/edits: model + prompt + image, the marked photo carries the selection', dp && dp.path === '/images/edits' && dp.model === 'qwen-image-edit' && dp.fields === 'model,prompt,image' && /magenta/.test(dp.prompt) && /a clear blue sky/.test(dp.prompt) && dp.transparent / (dp.imgW * dp.imgH) > 0.04, JSON.stringify(dp && [dp.fields, dp.model]));
+  check('result blended inside the selection', near(await px(0.51, 0.49), GOAL, 14));
+  await discard();
+  await page.evaluate(() => { window.__ai.dpMode = 'url'; });
+  const dl1 = (await logOf()).filter((l) => l.kind === 'download').length;
+  await runToReview();
+  const dls1 = (await logOf()).filter((l) => l.kind === 'download');
+  check('a result given as a deapi.ai address is downloaded', dls1.length === dl1 + 1 && /^https:\/\/img\.deapi\.ai\//.test(dls1.at(-1).url) && near(await px(0.51, 0.49), GOAL, 14));
+  await discard();
+  await page.evaluate(() => { window.__ai.dpMode = 'err'; });
+  await runToSelect();
+  check('an API error object is shown (model not found → settings shortcut)', /모델을 찾을 수 없어요/.test(await errText()) && (await page.locator('.sheet .btn >> text=AI 설정 열기').count()) === 1);
+  await page.evaluate(() => { window.__ai.dpMode = 'ok'; });
 
   // ---------------------------------------------------------------- 4) 전환 · 설정 유지
   console.log('▶ 전환 / 설정 유지');

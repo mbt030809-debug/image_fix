@@ -244,6 +244,22 @@ export async function parseFalImage(json, relay, opts) {
   return ensureImageBlob(blob);
 }
 
+// ------------------------------------------------------------ deAPI (OpenAI 호환 /images/edits)
+export const DEAPI_MODELS = ['qwen-image-edit', 'flux-kontext-dev'];
+export const DEAPI_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,60}$/;
+/** OpenAI 형식 이미지 응답 {data:[{b64_json|url}]} → 이미지 Blob (url 이면 허용된 도메인에서 내려받음). {error:{message}} 는 오류로 */
+export async function parseOpenAiImage(json, relay, opts, provider) {
+  const er = json && json.error;
+  if (er) throw new AiError({ status: 200, code: String((typeof er === 'object' && (er.code || er.type)) || 'error'), message: String((typeof er === 'object' ? er.message : er) || '').slice(0, 160) });
+  const d = json && Array.isArray(json.data) ? json.data[0] : null;
+  if (d && typeof d.b64_json === 'string' && d.b64_json) return ensureImageBlob(base64ToBlob(d.b64_json, 'image/png'));
+  if (d && typeof d.url === 'string' && d.url) {
+    if (d.url.startsWith('data:')) { const b = dataUrlToBlob(d.url); if (b) return ensureImageBlob(b); }
+    else { if (opts && opts.onPhase) opts.onPhase('download'); const { blob } = await relay(provider, { method: 'GET', url: d.url }, opts); return ensureImageBlob(blob); }
+  }
+  throw new AiError({ code: 'no_image', status: 200, message: '' });
+}
+
 // ------------------------------------------------------------ 레지스트리
 const COMMON_PRIVACY = () => t('전체 사진은 보내지 않아요.', 'The full photo is not sent.');
 const FREE_PRIVACY = () => t('무료/체험 서비스는 제공사 정책에 따라 보낸 내용이 저장·개선에 쓰일 수 있어요. 민감한 문구나 사진은 피해 주세요.', 'Free/trial services may store or use submitted content under the provider\'s policy. Avoid sensitive prompts or photos.');
@@ -370,6 +386,35 @@ export const PROVIDERS = {
     async edit(req, opts, relay = relayRaw) {
       const { blob } = await relay('fal', req, opts);
       return [await parseFalImage(await parseJsonBlob(blob), relay, opts)];
+    },
+    privacyText: (host) => t(`입력한 문구가 ${host} 로 전송돼요.`, `Your prompt is sent to ${host}.`),
+  },
+
+  deapi: {
+    id: 'deapi', short: 'deAPI', free: false, noKey: false, genOnly: false, usesMask: false, oneImage: true, maxN: 1, hasQuality: false, sizes: SIZES_FREE,
+    name: () => t('deAPI · 이미지 편집 (OpenAI 호환)', 'deAPI · image edit (OpenAI-compatible)'),
+    tag: () => t('내 API 키', 'Your API key'),
+    desc: () => t('deapi.ai 의 이미지 편집(/v1/images/edits)으로 사진을 고쳐요. 편집할 곳을 마젠타로 표시한 사진 1장과 문구를 보내요(마스크는 지원하지 않아요). 모델 이름이 다르면 설정의 “직접 지정”에서 deAPI 가 제공하는 이름으로 바꿔 주세요. 요청 형식은 OpenAI 호환 규약 기준이라 서버가 거부하면 그 사유를 그대로 보여 줘요.', 'Edits photos with deapi.ai image editing (/v1/images/edits). Sends one photo with the edit area marked in magenta plus your prompt (masks are not supported). If the model name differs, set the name deAPI offers under Manual in settings. The request follows the OpenAI-compatible convention; if the server refuses it, its reason is shown as-is.'),
+    howto: () => t('deapi.ai 에 가입해 대시보드에서 API 키를 만들어 붙여 넣어요. 사용량만큼 deAPI 계정에 청구될 수 있어요.', 'Sign up at deapi.ai and create an API key in the dashboard. Usage may be billed to your deAPI account.'),
+    host: () => 'oai.deapi.ai',
+    privacy: (host) => t(`표시를 넣은 선택 영역과 주변 이미지 1장과 입력한 문구가 ${host}(deAPI)로 전송돼요. ${COMMON_PRIVACY()} 사용량은 계정에 청구될 수 있어요.`, `One image of the selected area with its surroundings (marked in magenta) and your prompt are sent to ${host} (deAPI). ${COMMON_PRIVACY()} Usage may be billed to your account.`),
+    extra: null, modelPresets: DEAPI_MODELS, fallbackModel: DEAPI_MODELS[0], autoModel: DEAPI_MODELS[0],
+    async test(info, opts) {
+      const { blob } = await relayRaw('deapi', { method: 'GET', path: '/models' }, opts);
+      let ids = [];
+      try { const j = JSON.parse(await blob.text()); ids = (Array.isArray(j.data) ? j.data : Array.isArray(j) ? j : []).map((m) => String((m && (m.id || m.name)) || '')).filter(Boolean); } catch (e) { /* 목록을 못 읽어도 키는 통과 */ }
+      const list = ids.length ? ids : DEAPI_MODELS.slice();
+      return { kind: 'ok', text: t('연결됐어요(키 확인). 모델: ', 'Connected (key verified). Models: ') + list.slice(0, 8).join(', '), d: { list, best: list[0], free: [] } };
+    },
+    /** 표시한 사진 1장 + 문구 → multipart(model · prompt · image) */
+    async buildEdit(o, imgs) {
+      if (!DEAPI_MODEL_RE.test(String(o.model || ''))) throw new AiError({ status: 404, code: 'model_not_found', message: 'invalid model name' });
+      const mp = buildMultipart({ model: o.model, prompt: instructOne(o.prompt) }, [{ name: 'image', filename: 'image.png', type: 'image/png', blob: imgs.marked }]);
+      return { method: 'POST', path: '/images/edits', contentType: mp.contentType, body: mp.body };
+    },
+    async edit(req, opts, relay = relayRaw) {
+      const { blob } = await relay('deapi', req, opts);
+      return [await parseOpenAiImage(await parseJsonBlob(blob), relay, opts, 'deapi')];
     },
     privacyText: (host) => t(`입력한 문구가 ${host} 로 전송돼요.`, `Your prompt is sent to ${host}.`),
   },
