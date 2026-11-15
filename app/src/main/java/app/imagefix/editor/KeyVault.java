@@ -31,7 +31,7 @@ import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * AI 제공자별 API 키/부가 값 보관소 (cloudflare: 토큰 + 계정 ID, modelscope: 토큰, pollinations: 키 없음).
+ * AI 제공자별 API 키/부가 값 보관소 (cloudflare: 토큰 + 계정 ID, modelscope: 토큰, gemini: API 키, huggingface: 토큰).
  * 키는 AES-256-GCM 으로 암호화해 SharedPreferences 에 저장하고, 웹(JS) 쪽에는 마지막 4자리 힌트만 돌려준다.
  *
  * 암호화 방식(Tier)은 세 가지다. 키를 저장할 때 위에서부터 차례로 시도한다.
@@ -48,7 +48,7 @@ final class KeyVault implements AiClient.Config {
     private static final String PREFS = "imagefix_ai";
     private static final Charset UTF8 = Charset.forName("UTF-8");
     private static final Pattern KEY_OK = Pattern.compile("^[\\x21-\\x7e]{8,400}$");
-    static final String[] PROVIDERS = {"cloudflare", "pollinations", "modelscope"};
+    static final String[] PROVIDERS = {"cloudflare", "modelscope", "gemini", "huggingface"};
 
     /** 문자열 저장소 (실기기: SharedPreferences, 테스트: 메모리) */
     interface Store {
@@ -112,7 +112,8 @@ final class KeyVault implements AiClient.Config {
     }
 
     static String defaultBase(String provider) {
-        if ("pollinations".equals(provider)) return "https://image.pollinations.ai";
+        if ("gemini".equals(provider)) return "https://generativelanguage.googleapis.com/v1beta";
+        if ("huggingface".equals(provider)) return "https://router.huggingface.co";
         if ("modelscope".equals(provider)) return "https://api-inference.modelscope.cn/v1";
         return "https://api.cloudflare.com/client/v4";
     }
@@ -129,7 +130,7 @@ final class KeyVault implements AiClient.Config {
      */
     synchronized String set(String provider, String key, String extra) {
         if (!AiClient.knownProvider(provider)) return "ERR:provider";
-        if (!AiClient.needsKey(provider)) return "ERR:nokey"; // pollinations: 키가 필요 없다
+        if (!AiClient.needsKey(provider)) return "ERR:nokey"; // 알 수 없는 제공자
         boolean isCf = "cloudflare".equals(provider);
         String ex = extra == null ? "" : extra.trim().toLowerCase(Locale.ROOT);
         if (isCf && ex.length() > 0 && !AiClient.validAccount(ex)) return "ERR:badextra";

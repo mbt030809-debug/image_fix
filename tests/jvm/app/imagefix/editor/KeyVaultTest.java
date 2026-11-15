@@ -111,9 +111,10 @@ public class KeyVaultTest {
         String info = v.infoJson();
         JSONObject jo = new JSONObject(info).getJSONObject("providers").getJSONObject("modelscope");
         ok(jo.getBoolean("hasKey") && jo.getBoolean("readable") && "hw".equals(jo.getString("prot")) && !info.contains("AAAAAAAA") && !jo.has("base"), "info: hasKey/readable/prot, no key material, no base");
-        JSONObject jp = new JSONObject(info).getJSONObject("providers").getJSONObject("pollinations");
-        ok(!jp.getBoolean("hasKey") && jp.getBoolean("readable") && "".equals(jp.getString("prot")) && new JSONObject(info).getInt("v") == 3, "info v3 lists pollinations without a key");
-        ok(new JSONObject(info).getJSONObject("providers").length() == 3 && !new JSONObject(info).getJSONObject("providers").has("openai") && !new JSONObject(info).getJSONObject("providers").has("openrouter"), "exactly cloudflare / pollinations / modelscope");
+        JSONObject jp = new JSONObject(info).getJSONObject("providers").getJSONObject("gemini");
+        ok(!jp.getBoolean("hasKey") && jp.getBoolean("readable") && "".equals(jp.getString("prot")) && new JSONObject(info).getInt("v") == 3, "info v3 lists gemini (no key yet)");
+        ok(new JSONObject(info).getJSONObject("providers").has("huggingface") && !new JSONObject(info).getJSONObject("providers").has("pollinations"), "huggingface listed, pollinations gone");
+        ok(new JSONObject(info).getJSONObject("providers").length() == 4 && !new JSONObject(info).getJSONObject("providers").has("openai") && !new JSONObject(info).getJSONObject("providers").has("openrouter"), "exactly cloudflare / modelscope / gemini / huggingface");
         ok(!hw2.file.exists() && !sw.file.exists(), "the other tiers are not even touched when hw works");
         ok("hw=ok sw=ok".equals(v.selfTest()), "selfTest ok");
 
@@ -121,7 +122,9 @@ public class KeyVaultTest {
         System.out.println("▶ KeyVault: 입력 검증");
         ok("ERR:provider".equals(v.set("nope", K1, "")), "unknown provider");
         ok("ERR:provider".equals(v.set("openai", K1, "")) && "ERR:provider".equals(v.set("openrouter", K1, "")), "OpenAI/OpenRouter are not providers anymore");
-        ok("ERR:nokey".equals(v.set("pollinations", K1, "")) && !v.hasKey("pollinations"), "pollinations has no key to store");
+        ok("ERR:provider".equals(v.set("pollinations", K1, "")), "pollinations is not a provider anymore");
+        ok("OK".equals(v.set("gemini", "AIzaSyTestKey-1234567890", "")) && "AIz…7890".equals(v.hint("gemini")) && "OK".equals(v.set("huggingface", "hf_testtoken1234567890", "")) && "hf_…7890".equals(v.hint("huggingface")), "gemini / huggingface keys: stored per provider, no extra value");
+        v.clear("gemini"); v.clear("huggingface");
         ok("ERR:badkey".equals(v.set("modelscope", "short", "")), "too short key");
         ok("ERR:badkey".equals(v.set("modelscope", "ms-aaaa bbbbbbbb", "")), "inner whitespace");
         ok("ERR:badkey".equals(v.set("modelscope", "ms-한글한글한글한글", "")), "non-ASCII key");
@@ -133,8 +136,8 @@ public class KeyVaultTest {
         ok("OK".equals(v.set("cloudflare", "", "")) && K3.equals(v.apiKey("cloudflare")), "empty key keeps the stored key");
         ok("OK".equals(v.set("cloudflare", "", "ffffffffffffffffffffffffffffffff")) && "ffffffffffffffffffffffffffffffff".equals(v.extra("cloudflare")) && K3.equals(v.apiKey("cloudflare")), "the account id can change without re-entering the token");
         ok("OK".equals(v.set("cloudflare", K3, "")) && "ffffffffffffffffffffffffffffffff".equals(v.extra("cloudflare")), "re-saving the token without an id keeps the stored id");
-        ok("https://image.pollinations.ai".equals(v.baseUrl("pollinations")) && "https://api-inference.modelscope.cn/v1".equals(v.baseUrl("modelscope")) && "https://api.cloudflare.com/client/v4".equals(v.baseUrl("cloudflare")), "fixed server addresses (no custom base)");
-        ok(v.apiKey("pollinations") == null && !v.keyUnreadable("pollinations"), "pollinations: no key, never 'unreadable'");
+        ok("https://generativelanguage.googleapis.com/v1beta".equals(v.baseUrl("gemini")) && "https://router.huggingface.co".equals(v.baseUrl("huggingface")) && "https://api-inference.modelscope.cn/v1".equals(v.baseUrl("modelscope")) && "https://api.cloudflare.com/client/v4".equals(v.baseUrl("cloudflare")), "fixed server addresses (no custom base)");
+        ok(v.apiKey("gemini") == null && !v.keyUnreadable("gemini"), "gemini: no key yet, never 'unreadable'");
 
         // ---------------------------------------------------------------- 대체: hw → hw2 → sw
         System.out.println("▶ KeyVault: hw 실패 → hw2(별칭 v2) → sw(앱 전용 저장소)");
@@ -208,7 +211,7 @@ public class KeyVaultTest {
         v = new KeyVault(st, hw, hw2, sw);
         ok(st.m.get("iv") == null && st.m.get("ct") == null && st.m.get("hint") == null && st.m.get("base") == null && st.m.get("openrouter.iv") == null && st.m.get("openrouter.ct") == null && st.m.get("openrouter.hint") == null && st.m.get("openrouter.prot") == null, "the removed providers' encrypted keys are deleted at start-up");
         ok("keep-iv".equals(st.m.get("cloudflare.iv")) && "keep-ct".equals(st.m.get("cloudflare.ct")) && ACC.equals(st.m.get("cloudflare.extra")), "other providers' entries are untouched");
-        ok(!v.hasKey("modelscope") && !v.hasKey("pollinations"), "nothing leaks into the new providers");
+        ok(!v.hasKey("modelscope") && !v.hasKey("gemini") && !v.hasKey("huggingface"), "nothing leaks into the new providers");
         v.set("modelscope", K1, "");
         v.set("cloudflare", K3, ACC);
         v.clear("modelscope");

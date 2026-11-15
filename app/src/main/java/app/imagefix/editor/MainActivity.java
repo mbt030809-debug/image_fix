@@ -649,7 +649,7 @@ public class MainActivity extends Activity {
             return vault.infoJson();
         }
 
-        /** 제공자별 키 저장. key 가 비면 키는 유지하고 계정 ID(cloudflare)만 바꾼다. 성공 "OK" (pollinations 는 키가 없다 → "ERR:nokey") */
+        /** 제공자별 키 저장. key 가 비면 키는 유지하고 계정 ID(cloudflare)만 바꾼다. 성공 "OK" */
         @JavascriptInterface
         public String aiSetKey(String provider, String key, String extra) {
             return vault.set(provider, key, extra);

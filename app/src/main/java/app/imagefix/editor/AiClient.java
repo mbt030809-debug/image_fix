@@ -34,7 +34,7 @@ import javax.net.ssl.SSLException;
  * AI 요청 릴레이. 웹 페이지(WebView)는 CSP 와 외부 요청 차단 때문에 인터넷에 직접 접근할 수 없으므로,
  * 허용된 제공자(서버)·경로로만 이 클래스가 대신 요청한다.
  *
- * - 제공자 프로필: cloudflare(Workers AI) / pollinations(키 없는 무료 클래식 API) / modelscope(API-Inference, 비동기 작업).
+ * - 제공자 프로필: cloudflare(Workers AI) / modelscope(API-Inference 이미지 편집, 비동기 작업) / gemini(generateContent) / huggingface(FLUX.1 Fill, fal 경유).
  *   서버는 프로필의 https 주소 하나뿐이다. 예외는 결과 이미지 내려받기 하나: modelscope 가 응답으로 알려 주는 이미지 주소를
  *   허용된 도메인 접미사(aliyuncs.com · modelscope.cn · modelscope.ai) 안에서만 받는다(https, 자격 증명·포트 없음).
  * - 경로는 프로필별 허용 목록(정규식)만, 요청 본문 형식도 경로별로 제한. 리다이렉트는 따라가지 않는다.
@@ -72,6 +72,7 @@ final class AiClient {
     private static final Pattern JSON_TYPE = Pattern.compile("^application/json$");
     private static final Pattern MULTI_OR_JSON = Pattern.compile("^(application/json|multipart/form-data; boundary=[A-Za-z0-9'()+_,./:=?-]{1,70})$");
     private static final Pattern QUERY_OK = Pattern.compile("^[A-Za-z0-9=&._,%:-]{0,160}$");
+    private static final Pattern TASK_TYPE_OK = Pattern.compile("^(image_generation|image-to-image-generation)$");
     private static final Pattern ACCOUNT_OK = Pattern.compile("^[0-9a-f]{32}$");
     /** 결과 이미지 주소의 경로/쿼리(서명된 OSS 주소는 쿼리가 길다) */
     private static final Pattern RESULT_PATH_OK = Pattern.compile("^/[A-Za-z0-9._~%!$&'()*+,;=:@/-]{0,600}$");
@@ -129,9 +130,14 @@ final class AiClient {
                 // 모델 구간은 "."/".." 로 시작할 수 없다(경로 이탈 방지)
                 new Route("POST", "^/accounts/\\{account\\}/ai/run/@cf/[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$", MULTI_OR_JSON),
                 new Route("GET", "^/accounts/\\{account\\}/ai/models/search$", null)));
-        // 키 없이 쓰는 무료 클래식 API: GET /prompt/<URL 인코딩한 문구>?width=&height=&seed= → 이미지(JPEG)
-        PROFILES.put("pollinations", new Profile("pollinations", null, "", false, null,
-                new Route("GET", "^/prompt/[A-Za-z0-9%._~-]{1,2400}$", null).accept("image/jpeg,image/png,image/webp,image/*;q=0.8")));
+        // Gemini API: POST /v1beta/models/<모델>:generateContent (이미지 입력 + 이미지 출력), 키는 x-goog-api-key 헤더
+        PROFILES.put("gemini", new Profile("gemini", "x-goog-api-key", "", true, null,
+                new Route("POST", "^/models/[A-Za-z0-9][A-Za-z0-9._-]{0,60}:generateContent$", JSON_TYPE),
+                new Route("GET", "^/models$", null)));
+        // Hugging Face Inference Providers(fal-ai 경유) — FLUX.1 Fill [dev] 마스크 인페인팅. 결과가 주소로 오면 fal 도메인에서만 내려받는다
+        PROFILES.put("huggingface", new Profile("huggingface", "Authorization", "Bearer ", true,
+                Pattern.compile("^([a-z0-9-]+\\.)*(fal\\.media|fal\\.run)$"),
+                new Route("POST", "^/fal-ai/fal-ai/flux-lora-fill$", JSON_TYPE)));
         // API-Inference: 이미지 생성은 비동기 작업(POST 로 task_id → GET 으로 상태 확인 → 결과 이미지 주소 내려받기)
         PROFILES.put("modelscope", new Profile("modelscope", "Authorization", "Bearer ", true,
                 Pattern.compile("^([a-z0-9-]+\\.)*(aliyuncs\\.com|modelscope\\.cn|modelscope\\.ai)$"),
@@ -153,6 +159,7 @@ final class AiClient {
         String rawType;
         boolean download;
         String absUrl;
+        String tt; // ModelScope X-ModelScope-Task-Type (image_generation | image-to-image-generation)
         int status;
         String code = "", errType = "", message = "";
     }
@@ -177,7 +184,7 @@ final class AiClient {
         return id != null && PROFILES.containsKey(id);
     }
 
-    /** 이 제공자가 API 키(토큰)를 요구하나 (pollinations 는 아니다) */
+    /** 이 제공자가 API 키(토큰)를 요구하나 (모든 제공자가 요구한다) */
     static boolean needsKey(String id) {
         Profile p = id == null ? null : PROFILES.get(id);
         return p != null && p.needsKey;
@@ -243,7 +250,8 @@ final class AiClient {
 
     /**
      * spec: {"provider":"modelscope","method":"POST","path":"/images/generations","type":"application/json","len":123}
-     * 또는 {"provider":"pollinations","method":"GET","path":"/prompt/a%20cat?width=768&height=768".
+     * 또는 {"provider":"gemini","method":"POST","path":"/models/gemini-2.5-flash-image:generateContent","type":"application/json","len":123}.
+     * ModelScope 는 "tt":"image-to-image-generation" 으로 작업 종류 헤더를 고른다(편집).
      * path 에는 허용된 쿼리(?a=b)를 붙일 수 있고, cloudflare 경로의 {account} 는 저장된 계정 ID 로 치환된다.
      * 결과 이미지 내려받기: {"provider":"modelscope","method":"GET","url":"https://….aliyuncs.com/…"} (허용된 도메인만).
      * 성공 시 작업 id
@@ -294,6 +302,11 @@ final class AiClient {
                 j.path = path;
                 j.query = query;
                 j.route = route;
+            }
+            String tt = o.optString("tt", "");
+            if (tt.length() > 0) {
+                if (!"modelscope".equals(provider) || !TASK_TYPE_OK.matcher(tt).matches()) return "ERR:spec";
+                j.tt = tt;
             }
             j.provider = provider;
             j.method = method;
@@ -483,6 +496,7 @@ final class AiClient {
             c.setRequestProperty("Accept", j.route.accept);
             c.setRequestProperty("User-Agent", "ImageFix/1");
             for (String[] h : j.route.headers) c.setRequestProperty(h[0], h[1]);
+            if (j.tt != null) c.setRequestProperty("X-ModelScope-Task-Type", j.tt);
             if ("POST".equals(j.method)) {
                 byte[] body;
                 synchronized (j) {

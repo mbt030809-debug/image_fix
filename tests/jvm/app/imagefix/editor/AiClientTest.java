@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * AiClient JVM 테스트 (모의 HTTP 서버). 실행: tests/jvm/run.sh
  * 실기기와 같은 코드(AiClient)를 그대로 쓰고, https 제한만 insecureForTests 로 풀어 localhost 로 보낸다.
- * 제공자: cloudflare(키+계정 ID, JSON/multipart) · pollinations(키 없음, GET /prompt/…) · modelscope(비동기 작업 + 결과 이미지 내려받기)
+ * 제공자: cloudflare(키+계정 ID, JSON/multipart) · modelscope(편집: 비동기 작업 + 결과 내려받기) · gemini(generateContent) · huggingface(FLUX.1 Fill, fal 경유)
  */
 public class AiClientTest {
     static int pass = 0, fail = 0;
@@ -145,15 +145,19 @@ public class AiClientTest {
                             // 클라이언트가 끊음
                         }
                         reply(x, 200, "{\"data\":[]}");
-                    } else if (p.startsWith("/pl/prompt/")) {
-                        rec("pl", x, body);
-                        replyBytes(x, 200, "image/jpeg", JPG);
-                    } else if (p.startsWith("/pl402/prompt/")) {
-                        reply(x, 402, "{\"error\":\"Payment Required: free tier limit, one image per 45 seconds\"}");
-                    } else if (p.startsWith("/pltext/prompt/")) {
-                        replyBytes(x, 429, "text/plain", "Too many requests: wait 45 seconds".getBytes(UTF8));
-                    } else if (p.startsWith("/plhtml/prompt/")) {
-                        replyBytes(x, 200, "text/html", "<html>not an image</html>".getBytes(UTF8));
+                    } else if (p.startsWith("/gm/models/") && p.endsWith(":generateContent")) {
+                        rec("gm", x, body);
+                        reply(x, 200, "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"},{\"inlineData\":{\"mimeType\":\"image/png\",\"data\":\"QUJD\"}}]}}]}");
+                    } else if (p.equals("/gm/models")) {
+                        rec("gmList", x, body);
+                        reply(x, 200, "{\"models\":[{\"name\":\"models/gemini-2.5-flash-image\"},{\"name\":\"models/gemini-2.5-pro\"}]}");
+                    } else if (p.startsWith("/gm400/models/")) {
+                        reply(x, 400, "{\"error\":{\"code\":400,\"message\":\"API key not valid. Please pass a valid API key.\",\"status\":\"INVALID_ARGUMENT\"}}");
+                    } else if (p.equals("/hf/fal-ai/fal-ai/flux-lora-fill")) {
+                        rec("hf", x, body);
+                        reply(x, 200, "{\"images\":[{\"url\":\"data:image/png;base64,QUJD\",\"content_type\":\"image/png\"}]}");
+                    } else if (p.startsWith("/hf403/")) {
+                        reply(x, 403, "{\"error\":\"Access to model black-forest-labs/FLUX.1-Fill-dev is restricted (gated)\"}");
                     } else if (p.equals("/ms/v1/images/generations")) {
                         rec("msSubmit", x, body);
                         reply(x, 200, "{\"task_id\":\"task-abc123456\",\"request_id\":\"r1\"}");
@@ -199,9 +203,10 @@ public class AiClientTest {
 
         // ---------------------------------------------------------------- 제공자/키 규칙
         System.out.println("▶ providers");
-        ok(AiClient.knownProvider("cloudflare") && AiClient.knownProvider("pollinations") && AiClient.knownProvider("modelscope"), "three providers");
+        ok(AiClient.knownProvider("cloudflare") && AiClient.knownProvider("modelscope") && AiClient.knownProvider("gemini") && AiClient.knownProvider("huggingface"), "four providers");
+        ok(!AiClient.knownProvider("pollinations"), "Pollinations is gone");
         ok(!AiClient.knownProvider("openai") && !AiClient.knownProvider("openrouter") && !AiClient.knownProvider(null) && !AiClient.knownProvider(""), "OpenAI/OpenRouter are gone");
-        ok(AiClient.needsKey("cloudflare") && AiClient.needsKey("modelscope") && !AiClient.needsKey("pollinations") && !AiClient.needsKey("openai"), "pollinations needs no key");
+        ok(AiClient.needsKey("cloudflare") && AiClient.needsKey("modelscope") && AiClient.needsKey("gemini") && AiClient.needsKey("huggingface") && !AiClient.needsKey("pollinations") && !AiClient.needsKey("openai"), "every provider needs a key");
         ok(AiClient.validAccount(ACC) && !AiClient.validAccount("ABCDEF0123456789abcdef0123456789") && !AiClient.validAccount("short") && !AiClient.validAccount(null), "account id validation");
 
         // ---------------------------------------------------------------- begin 검증 (cloudflare)
@@ -312,36 +317,48 @@ public class AiClientTest {
         cs.cancel(sid2);
         ok("cancelled".equals(new JSONObject(cs.status(sid2)).getString("state")) && !cs.send(sid2), "cancel before send → cancelled, cannot send");
 
-        // ---------------------------------------------------------------- Pollinations (키 없음)
-        System.out.println("▶ Pollinations: GET /prompt/… without a key");
-        Cfg pcfg = new Cfg().with("pollinations", root + "/pl", null, null); // 키 없음
-        AiClient cp = new AiClient(pcfg);
-        String PQ = "/prompt/a%20small%20sailboat%2C%20%EB%85%B8%EC%9D%84?width=768&height=768&seed=42";
-        for (String bad : new String[]{"/prompt/", "/prompt/a b", "/prompt/a/b", "/prompt/../x", "/prompt/a?x=1&y=<", "/other", "/prompt/%0d%0aX", "/prompt/a'b", "/prompt/a(b)", "/prompt/" + new String(new char[2401]).replace('\0', 'a')}) {
-            String r = cp.begin("{\"provider\":\"pollinations\",\"method\":\"GET\",\"path\":\"" + bad.replace("\"", "") + "\"}");
-            ok("ERR:path".equals(r) || (bad.equals("/prompt/%0d%0aX") && r.startsWith("a")), "pollinations: rejects " + bad.substring(0, Math.min(24, bad.length())));
-            if (r.startsWith("a")) cp.release(r);
-        }
-        ok("ERR:path".equals(cp.begin("{\"provider\":\"pollinations\",\"method\":\"POST\",\"path\":\"/prompt/a\",\"type\":\"application/json\",\"len\":2}")), "pollinations: GET only");
-        ok("ERR:path".equals(cp.begin("{\"provider\":\"pollinations\",\"method\":\"GET\",\"url\":\"https://cdn.modelscope.cn/x.png\"}")), "pollinations: has no result-download host");
-        String pid = cp.begin("{\"provider\":\"pollinations\",\"method\":\"GET\",\"path\":\"" + PQ + "\"}");
-        ok(pid.startsWith("a"), "pollinations begin ok (percent-encoded Korean + comma in the path)");
-        ok(cp.send(pid), "send (no body)");
-        JSONObject pst = waitDone(cp, pid, 6000);
-        ok("done".equals(pst.optString("state")) && "image/jpeg".equals(pst.optString("ctype")) && Arrays.equals(cp.result(pid, 0), JPG), "jpeg result kept raw: " + pst);
-        Headers ph = H.get("pl");
-        ok(ph != null && ph.getFirst("Authorization") == null, "no Authorization header is sent to Pollinations");
-        ok(ph != null && String.valueOf(ph.getFirst("Accept")).startsWith("image/"), "Accept asks for images: " + (ph == null ? "" : ph.getFirst("Accept")));
-        ok(("/pl" + PQ).equals(U.get("pl")) && "GET".equals(M.get("pl")), "path + query forwarded as-is: " + U.get("pl"));
-        ok(B.get("pl").length == 0, "no body on GET");
-        cp.release(pid);
-        expectPl(root + "/pl402", 402, "http_402", "one image per 45 seconds", "402 JSON {error:string} (free tier limit)");
-        expectPl(root + "/pltext", 429, "http_429", "wait 45 seconds", "429 plain-text body is kept as the message");
-        AiClient chtml2 = new AiClient(new Cfg().with("pollinations", root + "/plhtml", null, null));
-        String hid2 = chtml2.begin("{\"provider\":\"pollinations\",\"method\":\"GET\",\"path\":\"/prompt/x\"}");
-        chtml2.send(hid2);
-        waitDone(chtml2, hid2, 6000);
-        ok("application/octet-stream".equals(chtml2.resultType(hid2)), "html instead of an image is not trusted (octet-stream)");
+        // ---------------------------------------------------------------- Gemini
+        System.out.println("▶ Gemini: generateContent");
+        AiClient cg = new AiClient(new Cfg().with("gemini", root + "/gm", "AIza-test-key-5555", null));
+        for (String bad : new String[]{"/models/x", "/models/gemini:streamGenerateContent", "/models/../x:generateContent", "/models/a b:generateContent", "/models/:generateContent", "/v1/models/gemini-x:generateContent", "/models/" + new String(new char[62]).replace('\0', 'a') + ":generateContent"})
+            ok("ERR:path".equals(cg.begin("{\"provider\":\"gemini\",\"method\":\"POST\",\"path\":\"" + bad + "\",\"type\":\"application/json\",\"len\":2}")), "gemini: rejects " + bad.substring(0, Math.min(30, bad.length())));
+        ok("ERR:type".equals(cg.begin("{\"provider\":\"gemini\",\"method\":\"POST\",\"path\":\"/models/gemini-2.5-flash-image:generateContent\",\"type\":\"" + MP + "\",\"len\":3}")), "gemini: JSON only");
+        ok("ERR:path".equals(cg.begin("{\"provider\":\"gemini\",\"method\":\"GET\",\"url\":\"https://x.aliyuncs.com/x.png\"}")), "gemini: no result-download host");
+        byte[] gbody = "{\"contents\":[{\"parts\":[{\"text\":\"한글\"}]}]}".getBytes(UTF8);
+        String gid = cg.begin("{\"provider\":\"gemini\",\"method\":\"POST\",\"path\":\"/models/gemini-2.5-flash-image:generateContent\",\"type\":\"application/json\",\"len\":" + gbody.length + "}");
+        ok(gid.startsWith("a"), "gemini begin ok (colon in the path)");
+        cg.chunk(gid, Base64.getEncoder().encodeToString(gbody));
+        cg.send(gid);
+        JSONObject gst = waitDone(cg, gid, 6000);
+        ok("done".equals(gst.optString("state")) && new String(cg.result(gid, 0), UTF8).contains("inlineData"), "gemini JSON result kept raw: " + gst);
+        Headers gh = H.get("gm");
+        ok(gh != null && "AIza-test-key-5555".equals(gh.getFirst("x-goog-api-key")) && gh.getFirst("Authorization") == null && "application/json".equals(gh.getFirst("Content-Type")), "key goes in x-goog-api-key only");
+        ok(Arrays.equals(B.get("gm"), gbody) && "/gm/models/gemini-2.5-flash-image:generateContent".equals(U.get("gm")), "body forwarded intact, path with the colon");
+        cg.release(gid);
+        String gl = cg.begin("{\"provider\":\"gemini\",\"method\":\"GET\",\"path\":\"/models?pageSize=100\"}");
+        cg.send(gl);
+        ok("done".equals(waitDone(cg, gl, 6000).optString("state")) && "AIza-test-key-5555".equals(H.get("gmList").getFirst("x-goog-api-key")), "gemini model list (key check)");
+        expectErrorWith(new AiClient(new Cfg().with("gemini", root + "/gm400", "bad", null)), "gemini", "/models/gemini-2.5-flash-image:generateContent", 400, "400", "API key not valid");
+        expectErrorWith(new AiClient(new Cfg().with("gemini", root + "/gm", null, null)), "gemini", "/models/gemini-2.5-flash-image:generateContent", 401, "no_key", "");
+
+        // ---------------------------------------------------------------- Hugging Face (fal 경유 FLUX.1 Fill)
+        System.out.println("▶ Hugging Face: FLUX.1 Fill via fal");
+        AiClient ch = new AiClient(new Cfg().with("huggingface", root + "/hf", "hf_test_token_6666", null));
+        for (String bad : new String[]{"/fal-ai/fal-ai/flux-lora", "/fal-ai/fal-ai/flux-lora-fill/x", "/hf-inference/models/x", "/../fal-ai/fal-ai/flux-lora-fill", "/models"})
+            ok("ERR:path".equals(ch.begin("{\"provider\":\"huggingface\",\"method\":\"POST\",\"path\":\"" + bad + "\",\"type\":\"application/json\",\"len\":2}")), "huggingface: rejects " + bad);
+        ok("ERR:path".equals(ch.begin("{\"provider\":\"huggingface\",\"method\":\"GET\",\"path\":\"/fal-ai/fal-ai/flux-lora-fill\"}")), "huggingface: POST only");
+        ok("ERR:type".equals(ch.begin("{\"provider\":\"huggingface\",\"method\":\"POST\",\"path\":\"/fal-ai/fal-ai/flux-lora-fill\",\"type\":\"" + MP + "\",\"len\":3}")), "huggingface: JSON only");
+        byte[] hbody = "{\"prompt\":\"x\",\"image_url\":\"data:image/png;base64,AA==\",\"mask_url\":\"data:image/png;base64,AA==\",\"sync_mode\":true}".getBytes(UTF8);
+        String hfid = ch.begin("{\"provider\":\"huggingface\",\"method\":\"POST\",\"path\":\"/fal-ai/fal-ai/flux-lora-fill\",\"type\":\"application/json\",\"len\":" + hbody.length + "}");
+        ok(hfid.startsWith("a"), "huggingface begin ok");
+        ch.chunk(hfid, Base64.getEncoder().encodeToString(hbody));
+        ch.send(hfid);
+        JSONObject hfst = waitDone(ch, hfid, 6000);
+        ok("done".equals(hfst.optString("state")) && new String(ch.result(hfid, 0), UTF8).contains("data:image/png"), "huggingface JSON result kept raw: " + hfst);
+        Headers hh = H.get("hf");
+        ok(hh != null && "Bearer hf_test_token_6666".equals(hh.getFirst("Authorization")) && Arrays.equals(B.get("hf"), hbody), "bearer token + body intact");
+        ch.release(hfid);
+        expectErrorWith(new AiClient(new Cfg().with("huggingface", root + "/hf403", "hf_x", null)), "huggingface", "/fal-ai/fal-ai/flux-lora-fill", 403, "http_403", "gated");
 
         // ---------------------------------------------------------------- ModelScope (비동기 작업 + 결과 내려받기)
         System.out.println("▶ ModelScope: submit → poll → download");
@@ -365,6 +382,23 @@ public class AiClientTest {
         ok(sh != null && sh.getFirst("X-ModelScope-Task-Type") == null, "submit does not send a task-type header");
         ok(Arrays.equals(B.get("msSubmit"), sub) && "/ms/v1/images/generations".equals(U.get("msSubmit")), "submit body forwarded intact (UTF-8)");
         cm.release(mid);
+        // 편집(Qwen-Image-Edit): 작업 종류 헤더를 spec 의 tt 로 고른다
+        String me = cm.begin("{\"provider\":\"modelscope\",\"method\":\"POST\",\"path\":\"/images/generations\",\"type\":\"application/json\",\"len\":" + sub.length + ",\"tt\":\"image-to-image-generation\"}");
+        ok(me.startsWith("a"), "edit submit begin ok (tt)");
+        cm.chunk(me, Base64.getEncoder().encodeToString(sub));
+        cm.send(me);
+        waitDone(cm, me, 6000);
+        ok("image-to-image-generation".equals(H.get("msSubmit").getFirst("X-ModelScope-Task-Type")) && "true".equals(H.get("msSubmit").getFirst("X-ModelScope-Async-Mode")), "edit submit sends the image-to-image task type");
+        cm.release(me);
+        for (String badTt : new String[]{"evil", "image_generation\\r\\nX: y", "IMAGE_GENERATION"})
+            ok("ERR:spec".equals(cm.begin("{\"provider\":\"modelscope\",\"method\":\"GET\",\"path\":\"/tasks/task-abc123456\",\"tt\":\"" + badTt + "\"}")), "tt rejected: " + badTt.substring(0, Math.min(10, badTt.length())));
+        ok("ERR:spec".equals(cg.begin("{\"provider\":\"gemini\",\"method\":\"GET\",\"path\":\"/models\",\"tt\":\"image_generation\"}")), "tt only for modelscope");
+        polls.set(0);
+        String te = cm.begin("{\"provider\":\"modelscope\",\"method\":\"GET\",\"path\":\"/tasks/task-abc123456\",\"tt\":\"image-to-image-generation\"}");
+        cm.send(te);
+        waitDone(cm, te, 6000);
+        ok("image-to-image-generation".equals(H.get("msPoll").getFirst("X-ModelScope-Task-Type")), "edit poll sends the image-to-image task type");
+        cm.release(te);
         polls.set(0);
         String t1 = cm.begin("{\"provider\":\"modelscope\",\"method\":\"GET\",\"path\":\"/tasks/task-abc123456\"}");
         cm.send(t1);
@@ -416,7 +450,7 @@ public class AiClientTest {
                 "https://x.aliyuncs.com:8443/x.png", "https://u:p@x.aliyuncs.com/x.png", "https://x.aliyuncs.com/x.png#frag", "https://x.aliyuncs.com/a b.png", "https://x.aliyuncs.com/x.png?" + new String(new char[1000]).replace('\0', 'a'),
                 "https://127.0.0.1/x.png", "https://localhost/x.png", "ftp://x.aliyuncs.com/x.png", "javascript:alert(1)", "", "https://", "//x.aliyuncs.com/x.png", "https://x.aliyuncs.com/%0d%0a<x>.png", "https://x.aliyuncs.com"})
             ok(AiClient.checkResultUrl(ms, bad) == null, "rejects " + (bad.isEmpty() ? "(empty)" : bad.substring(0, Math.min(40, bad.length()))));
-        ok(AiClient.checkResultUrl(AiClient.PROFILES.get("cloudflare"), "https://x.aliyuncs.com/x.png") == null && AiClient.checkResultUrl(AiClient.PROFILES.get("pollinations"), "https://x.aliyuncs.com/x.png") == null && AiClient.checkResultUrl(null, "https://x.aliyuncs.com/x.png") == null, "only modelscope may download result images");
+        ok(AiClient.checkResultUrl(AiClient.PROFILES.get("cloudflare"), "https://x.aliyuncs.com/x.png") == null && AiClient.checkResultUrl(AiClient.PROFILES.get("gemini"), "https://x.aliyuncs.com/x.png") == null && AiClient.checkResultUrl(AiClient.PROFILES.get("huggingface"), "https://x.aliyuncs.com/x.png") == null && AiClient.checkResultUrl(AiClient.PROFILES.get("huggingface"), "https://v3.fal.media/files/a/x.png?x=1") != null && AiClient.checkResultUrl(AiClient.PROFILES.get("huggingface"), "https://fal.media.evil.com/x.png") == null && AiClient.checkResultUrl(null, "https://x.aliyuncs.com/x.png") == null, "only modelscope (aliyuncs/modelscope) and huggingface (fal) may download result images, each from its own hosts");
         AiClient.insecureForTests = true;
 
         srv.stop(0);
@@ -459,16 +493,6 @@ public class AiClientTest {
         JSONObject o = waitDone(ac, id, 8000);
         boolean good = "error".equals(o.optString("state")) && o.optInt("status", -1) == status && code.equals(o.optString("code")) && o.optString("message").contains(msgPart);
         ok(good, "error mapping " + label + " → " + o);
-        ac.release(id);
-    }
-
-    static void expectPl(String base, int status, String code, String msgPart, String label) throws Exception {
-        AiClient ac = new AiClient(new Cfg().with("pollinations", base, null, null));
-        String id = ac.begin("{\"provider\":\"pollinations\",\"method\":\"GET\",\"path\":\"/prompt/a%20cat?width=768&height=768\"}");
-        ac.send(id);
-        JSONObject o = waitDone(ac, id, 8000);
-        boolean good = "error".equals(o.optString("state")) && o.optInt("status", -1) == status && code.equals(o.optString("code")) && o.optString("message").contains(msgPart);
-        ok(good, "error mapping pollinations " + label + " → " + o);
         ac.release(id);
     }
 
