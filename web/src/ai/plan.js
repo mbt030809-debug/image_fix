@@ -3,7 +3,7 @@ import { growMask } from './selection.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
-/** gpt-image 계열이 공통으로 받는 출력 크기 */
+/** 기본 출력 크기 클래스(제공자가 따로 크기 목록을 주지 않을 때 쓴다 — 제공자마다 자기 목록: providers.js 의 SIZES_*) */
 export const SIZES = [
   { w: 1024, h: 1024, str: '1024x1024', ar: 1 },
   { w: 1536, h: 1024, str: '1536x1024', ar: 1.5 },
