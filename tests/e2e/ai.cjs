@@ -67,12 +67,14 @@ let HH = null;
   console.log('▶ 요청 / 결과');
   await page.click('.sheet-head .btn >> text=AI로 수정'); await page.waitForTimeout(250);
   check('consent dialog before the first request names the server', (await page.locator('.dialog').count()) === 1 && /api\.cloudflare\.com/.test(await page.locator('.dialog p').textContent()));
+  await page.evaluate(() => { window.__ai.delay = 3000; }); // 진행 중 화면을 확인하는 동안(스크린샷 포함) 요청이 끝나 버리지 않게 가짜 서버를 느리게
   await page.click('.dialog .btn >> text=동의하고 계속');
   await page.waitForFunction(() => window.imagefix.editor.tool && window.imagefix.editor.tool.selection().phase === 'busy', null, { timeout: 5000 });
   await page.waitForSelector('.ai-sent', { timeout: 15000 }); // 이미지 준비가 끝나 "보낸 이미지"가 보일 때까지
   await h.shot('a3_busy');
   check('busy state shows sent image preview + cancel', (await page.locator('.ai-sent').count()) === 1 && (await page.locator('.sheet-head .btn >> text=취소').count()) === 1);
   await page.waitForFunction(() => window.imagefix.editor.tool.selection().phase === 'review', null, { timeout: 20000 });
+  await page.evaluate(() => { window.__ai.delay = 600; });
   await page.waitForTimeout(250);
   const log = await page.evaluate(() => window.__ai.log);
   const rq = log.find((l) => l.kind === 'edit');
