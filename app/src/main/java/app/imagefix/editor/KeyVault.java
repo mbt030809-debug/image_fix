@@ -11,15 +11,15 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.charset.Charset;
 import java.security.Key;
 import java.security.KeyStore;
 import java.security.SecureRandom;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -31,7 +31,7 @@ import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * AI 제공자별 API 키/서버 주소/부가 값 보관소.
+ * AI 제공자별 API 키/부가 값 보관소 (cloudflare: 토큰 + 계정 ID, modelscope: 토큰, pollinations: 키 없음).
  * 키는 AES-256-GCM 으로 암호화해 SharedPreferences 에 저장하고, 웹(JS) 쪽에는 마지막 4자리 힌트만 돌려준다.
  *
  * 암호화 방식(Tier)은 세 가지다. 키를 저장할 때 위에서부터 차례로 시도한다.
@@ -41,17 +41,14 @@ import javax.crypto.spec.SecretKeySpec;
  * - sw : Keystore 를 아예 쓸 수 없는 기기(일부 에뮬레이터·PC 용 안드로이드 등)용 대체. 앱 전용 폴더(noBackup)의 임의 AES-256 키 파일.
  *        앱 샌드박스가 지켜 주는 수준이라 hw 보다 약하므로 웹 화면에 그 사실을 알린다(info 의 prot).
  * 저장 직후 그 방식으로 다시 풀어 보아 같은 값이 나오는지 확인하고, 실패하면 다음 방식으로 넘어간다(저장했다고 해 놓고 못 읽는 일을 막는다).
- * 저장 키 이름: openai 는 iv/ct/hint/base/prot (이전 버전과 호환, prot 없음 = hw), 그 외는 "<제공자>.iv" 등.
+ * 저장 키 이름: "<제공자>.iv" · ".ct" · ".hint" · ".prot" · ".extra". 이전 버전의 OpenAI/OpenRouter 항목은 시작할 때 지운다(제공자 삭제).
  */
 final class KeyVault implements AiClient.Config {
-    static final String DEFAULT_BASE = "https://api.openai.com/v1";
     private static final String ALIAS = "imagefix_ai_v1", ALIAS2 = "imagefix_ai_v2";
     private static final String PREFS = "imagefix_ai";
     private static final Charset UTF8 = Charset.forName("UTF-8");
     private static final Pattern KEY_OK = Pattern.compile("^[\\x21-\\x7e]{8,400}$");
-    private static final Pattern HOST_OK = Pattern.compile("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$");
-    private static final Pattern PATH_OK = Pattern.compile("^(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$"); // "."/".." 구간 거부
-    static final String[] PROVIDERS = {"openai", "openrouter", "cloudflare"};
+    static final String[] PROVIDERS = {"cloudflare", "pollinations", "modelscope"};
 
     /** 문자열 저장소 (실기기: SharedPreferences, 테스트: 메모리) */
     interface Store {
@@ -85,6 +82,27 @@ final class KeyVault implements AiClient.Config {
         this.hw = hw;
         this.hw2 = hw2;
         this.sw = sw;
+        purgeRemovedProviders();
+    }
+
+    /** 삭제된 제공자(OpenAI·OpenRouter)가 저장해 둔 키/주소를 지운다 — 더는 쓸 수 없는 암호화된 키를 기기에 남겨 두지 않는다 */
+    private void purgeRemovedProviders() {
+        try {
+            List<String> names = new ArrayList<String>();
+            for (String n : new String[]{"iv", "ct", "hint", "base", "prot", "extra"}) {
+                names.add(n); // 1.1~1.4: OpenAI 는 접두사 없는 이름을 썼다
+                names.add("openrouter." + n);
+                names.add("openai." + n);
+            }
+            boolean any = false;
+            for (String n : names) if (store.get(n) != null) {
+                any = true;
+                break;
+            }
+            if (any) store.commit(new HashMap<String, String>(), names.toArray(new String[0]));
+        } catch (Throwable ignore) {
+            // 지우지 못해도 쓰이지 않는다
+        }
     }
 
     private static File swFile(Context c) {
@@ -94,59 +112,28 @@ final class KeyVault implements AiClient.Config {
     }
 
     static String defaultBase(String provider) {
-        if ("openrouter".equals(provider)) return "https://openrouter.ai/api/v1";
-        if ("cloudflare".equals(provider)) return "https://api.cloudflare.com/client/v4";
-        return DEFAULT_BASE;
+        if ("pollinations".equals(provider)) return "https://image.pollinations.ai";
+        if ("modelscope".equals(provider)) return "https://api-inference.modelscope.cn/v1";
+        return "https://api.cloudflare.com/client/v4";
     }
 
     private static String k(String provider, String name) {
-        return "openai".equals(provider) ? name : provider + "." + name;
-    }
-
-    /** 서버 주소 정규화. 공개 도메인의 https 주소만 허용(IP·localhost·사내 도메인·자격 증명·쿼리 거부). 빈 값이면 기본값. 잘못되면 null */
-    static String validateBase(String raw) {
-        if (raw == null || raw.trim().length() == 0) return DEFAULT_BASE;
-        String s = raw.trim();
-        if (s.length() > 200) return null;
-        URI u;
-        try {
-            u = new URI(s);
-        } catch (URISyntaxException e) {
-            return null;
-        }
-        if (!"https".equals(u.getScheme())) return null;
-        if (u.getRawUserInfo() != null || u.getRawQuery() != null || u.getRawFragment() != null) return null;
-        if (u.getPort() != -1 && u.getPort() != 443) return null;
-        String host = u.getHost();
-        if (host == null) return null;
-        host = host.toLowerCase(Locale.ROOT);
-        if (!HOST_OK.matcher(host).matches()) return null;
-        if (host.matches("[0-9.]+")) return null; // IPv4 리터럴
-        if (host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".localhost") || host.endsWith(".lan") || host.endsWith(".home")) return null;
-        String path = u.getRawPath() == null ? "" : u.getRawPath();
-        while (path.endsWith("/")) path = path.substring(0, path.length() - 1);
-        if (!PATH_OK.matcher(path).matches() || path.length() > 80) return null;
-        return "https://" + host + path;
+        return provider + "." + name;
     }
 
     // ------------------------------------------------------------------ 저장
 
     /**
-     * 저장. key 가 비어 있으면 기존 키를 유지한 채 서버 주소(openai 만)/부가 값(cloudflare 계정 ID)만 바꾼다.
-     * 성공 "OK", 실패 "ERR:provider|badbase|badkey|badextra" 또는 "ERR:store:<원인>"(원인 = 예외 클래스 이름, 키 내용은 절대 넣지 않는다)
+     * 저장. key 가 비어 있으면 기존 키를 유지한 채 부가 값(cloudflare 계정 ID)만 바꾼다.
+     * 성공 "OK", 실패 "ERR:provider|nokey|badkey|badextra" 또는 "ERR:store:<원인>"(원인 = 예외 클래스 이름, 키 내용은 절대 넣지 않는다)
      */
-    synchronized String set(String provider, String key, String base, String extra) {
+    synchronized String set(String provider, String key, String extra) {
         if (!AiClient.knownProvider(provider)) return "ERR:provider";
-        boolean isOpenAi = "openai".equals(provider), isCf = "cloudflare".equals(provider);
-        String nb = null;
-        if (isOpenAi) {
-            nb = validateBase(base);
-            if (nb == null) return "ERR:badbase";
-        }
+        if (!AiClient.needsKey(provider)) return "ERR:nokey"; // pollinations: 키가 필요 없다
+        boolean isCf = "cloudflare".equals(provider);
         String ex = extra == null ? "" : extra.trim().toLowerCase(Locale.ROOT);
         if (isCf && ex.length() > 0 && !AiClient.validAccount(ex)) return "ERR:badextra";
         Map<String, String> puts = new HashMap<String, String>();
-        if (isOpenAi) puts.put(k(provider, "base"), nb);
         if (isCf && ex.length() > 0) puts.put(k(provider, "extra"), ex);
         try {
             if (key == null || key.length() == 0) {
@@ -254,14 +241,14 @@ final class KeyVault implements AiClient.Config {
     synchronized void clear(String provider) {
         if (!AiClient.knownProvider(provider)) return;
         try {
-            store.commit(new HashMap<String, String>(), k(provider, "iv"), k(provider, "ct"), k(provider, "hint"), k(provider, "base"), k(provider, "extra"), k(provider, "prot"));
+            store.commit(new HashMap<String, String>(), k(provider, "iv"), k(provider, "ct"), k(provider, "hint"), k(provider, "extra"), k(provider, "prot"));
         } catch (Throwable ignore) {
             // 삭제 실패는 다음 저장 때 덮어써진다
         }
         readableCache.clear();
     }
 
-    /** 웹에 돌려줄 상태: {"v":2,"providers":{"openai":{"hasKey":..,"hint":..,"base":..,"extra":..,"readable":..,"prot":..},…}} (키 자체는 없음) */
+    /** 웹에 돌려줄 상태: {"v":3,"providers":{"cloudflare":{"hasKey":..,"hint":..,"extra":..,"readable":..,"prot":..},…}} (키 자체는 없음) */
     synchronized String infoJson() {
         try {
             JSONObject ps = new JSONObject();
@@ -270,15 +257,14 @@ final class KeyVault implements AiClient.Config {
                 boolean has = hasKey(p);
                 o.put("hasKey", has);
                 o.put("hint", hint(p));
-                o.put("base", baseUrl(p));
                 o.put("extra", extra(p));
                 o.put("readable", !keyUnreadable(p));
                 o.put("prot", has ? prot(p) : "");
                 ps.put(p, o);
             }
-            return new JSONObject().put("v", 2).put("providers", ps).toString();
+            return new JSONObject().put("v", 3).put("providers", ps).toString();
         } catch (Throwable e) {
-            return "{\"v\":2,\"providers\":{}}";
+            return "{\"v\":3,\"providers\":{}}";
         }
     }
 
@@ -300,10 +286,7 @@ final class KeyVault implements AiClient.Config {
 
     @Override
     public synchronized String baseUrl(String provider) {
-        if (!"openai".equals(provider)) return defaultBase(provider);
-        String b = store.get(k(provider, "base"));
-        String v = b == null ? DEFAULT_BASE : validateBase(b);
-        return v == null ? DEFAULT_BASE : v;
+        return defaultBase(provider);
     }
 
     @Override

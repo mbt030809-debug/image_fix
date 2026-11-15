@@ -1,31 +1,30 @@
-// AI 설정: 제공자 선택(OpenAI / OpenRouter 무료 모델 / Cloudflare 하루 무료) · API 키(기기 Keystore 에 암호화 저장) · 모델 · 연결 테스트 · 개인정보 안내
+// AI 설정: 제공자 선택(Cloudflare 하루 무료 / Pollinations 키 없이 무료 / ModelScope 무료 체험) · API 키(기기 Keystore 에 암호화 저장) · 모델 · 연결 테스트 · 개인정보 안내
 import { h } from '../ui/dom.js';
 import { t } from '../i18n.js';
 import { openModal, Segmented, Chips, Btn, toast, confirmDialog } from '../ui/components.js';
 import { bridge } from '../bridge.js';
-import { DEFAULT_BASE, MODEL_AUTO, cleanKey, explainError } from '../ai/openai.js';
-import { AiError } from '../ai/client.js';
+import { MODEL_AUTO, cleanKey, explainError } from '../ai/common.js';
 import { PROVIDERS, PROVIDER_IDS, getProvider, isCfGenerateModel } from '../ai/providers.js';
 
-const AI_DEFAULTS = { provider: 'openai', quality: 'medium', n: 1, ctx: 1, feather: 30, tone: true, translate: true };
-const P_DEFAULTS = () => ({ model: MODEL_AUTO, custom: '', resolved: '', models: [], free: [], meta: {} });
+const AI_DEFAULTS = { provider: 'cloudflare', ctx: 1, feather: 30, tone: true, translate: true };
+const P_DEFAULTS = () => ({ model: MODEL_AUTO, custom: '', models: [] });
+const REMOVED = ['openai', 'openrouter']; // 삭제된 제공자(1.5.0)
 
 /**
  * 설정의 AI 항목(같은 객체를 계속 돌려준다 — 여러 곳에서 고쳐도 한 객체에 모이도록). 키 자체는 여기 없다(네이티브 Keystore).
- * p[제공자] = 모델 선택/자동 선택 결과/조회한 목록, consents[제공자] = 동의한 서버 호스트
+ * p[제공자] = 모델 선택/조회한 목록, consents[제공자] = 동의한 서버 호스트. 삭제된 제공자(OpenAI·OpenRouter)의 설정은 지운다.
  */
 export function aiConfig(app) {
   const s = app.settings;
   if (!s.ai || typeof s.ai !== 'object') s.ai = {};
   const c = s.ai;
-  if (!c.p || typeof c.p !== 'object') { // 1.1.0(OpenAI 전용) 설정에서 이전
-    c.p = { openai: Object.assign(P_DEFAULTS(), { model: c.model || MODEL_AUTO, custom: c.custom || '', resolved: c.resolved || '', models: Array.isArray(c.models) ? c.models : [] }) };
-    for (const k of ['model', 'custom', 'resolved', 'models']) delete c[k];
-  }
-  if (!c.consents || typeof c.consents !== 'object') { c.consents = {}; if (c.consent && c.consent.base) c.consents.openai = c.consent.base; }
-  delete c.consent;
+  if (!c.p || typeof c.p !== 'object') c.p = {};
+  if (!c.consents || typeof c.consents !== 'object') c.consents = {};
+  for (const id of REMOVED) { delete c.p[id]; delete c.consents[id]; delete c.consents[id + ':text']; }
+  for (const k of ['consent', 'quality', 'n', 'model', 'custom', 'resolved', 'models']) delete c[k]; // 옛 버전 흔적
   for (const k of Object.keys(AI_DEFAULTS)) if (!(k in c)) c[k] = AI_DEFAULTS[k];
-  if (!PROVIDERS[c.provider]) c.provider = 'openai';
+  if (!PROVIDERS[c.provider]) c.provider = AI_DEFAULTS.provider;
+  if (c.genProvider && !PROVIDERS[c.genProvider]) delete c.genProvider;
   return c;
 }
 
@@ -38,39 +37,25 @@ export function pcfg(cfg, pid) {
 }
 
 export const providerInfo = (pid) => { const i = bridge.ai.info(); return (i && i.providers && i.providers[pid]) || null; };
-/** 이 제공자를 바로 쓸 수 있나(키 + 필요한 부가 값) */
+/** 이 제공자를 바로 쓸 수 있나(키 + 필요한 부가 값. Pollinations 는 키가 필요 없어 늘 가능) */
 export function providerReady(pid) {
-  const pi = providerInfo(pid), P = getProvider(pid);
+  const P = getProvider(pid);
+  if (P.noKey) return true;
+  const pi = providerInfo(pid);
   return !!(pi && pi.hasKey && pi.readable !== false && (!P.extra || pi.extra));
 }
 
-/** 현재 쓸 모델 id: 직접 지정 > 자동(제공자가 정함: 고정/키로 조회) > 기본값 */
-export async function resolveModel(app, pid, opts) {
+/** 현재 쓸 모델 id: 직접 지정 > 자동(제공자가 정함) */
+export async function resolveModel(app, pid) {
   const cfg = aiConfig(app), pc = pcfg(cfg, pid), P = getProvider(pid);
   if (pc.model !== MODEL_AUTO) return (pc.custom || '').trim() || pc.model || P.fallbackModel;
-  if (P.autoModel) return P.autoModel;
-  if (pc.resolved) return pc.resolved;
-  try {
-    const d = await P.discover(opts);
-    pc.models = d.list; pc.free = d.free; pc.meta = d.meta || {}; pc.resolved = d.best || '';
-    app.saveSettings();
-  } catch (e) {
-    if (e && e.info && (e.info.status === 401 || e.info.code === 'cancelled')) throw e;
-    if (P.id !== 'openai') throw e; // 목록 없이는 쓸 모델을 알 수 없다(OpenRouter)
-    pc.resolved = '';
-    return P.fallbackModel;
-  }
-  if (!pc.resolved) {
-    if (P.id === 'openrouter') throw new AiError({ code: 'no_free_model' });
-    pc.resolved = P.fallbackModel;
-  }
-  return pc.resolved;
+  return P.autoModel || P.fallbackModel;
 }
 
 export function privacyNote(pid) {
   const P = getProvider(pid);
   const pi = providerInfo(pid);
-  return P.privacy(P.host(pi)) + ' ' + t('AI 수정을 쓰지 않으면 앱은 인터넷을 쓰지 않아요.', 'If you never use AI edit, the app never uses the internet.');
+  return P.privacy(P.host(pi)) + ' ' + t('AI 기능을 쓰지 않으면 앱은 인터넷을 쓰지 않아요.', 'If you never use AI features, the app never uses the internet.');
 }
 
 /**
@@ -97,18 +82,17 @@ export function openAiSettings(app, opts = {}) {
   let pid = opts.provider && PROVIDERS[opts.provider] ? opts.provider : cfg.provider;
   let info = bridge.ai.info();
   let testMsg = null, testing = false;
-  const pinfo = () => (info && info.providers && info.providers[pid]) || { hasKey: false, hint: '', base: '', extra: '' };
+  const pinfo = () => (info && info.providers && info.providers[pid]) || { hasKey: false, hint: '', extra: '' };
   const body = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px' } });
 
   const keyInput = h('input', { class: 'field', type: 'password', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: 'sk-…', 'aria-label': t('API 키', 'API key'), name: 'imagefix-ai-key' });
   const extraInput = h('input', { class: 'field', type: 'text', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'aria-label': t('계정 ID', 'Account ID'), name: 'imagefix-ai-account' });
-  const baseInput = h('input', { class: 'field', type: 'url', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: DEFAULT_BASE, 'aria-label': t('서버 주소', 'Server address') });
   const customInput = h('input', { class: 'field', type: 'text', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'aria-label': t('모델 이름', 'Model name') });
 
   const fail = {
-    'ERR:badbase': t('서버 주소가 올바르지 않아요. https:// 로 시작하는 공개 도메인만 쓸 수 있어요.', 'Invalid server address. Only public https:// domains are allowed.'),
     'ERR:badkey': t('키 형식이 올바르지 않아요.', 'The key format is invalid.'),
     'ERR:badextra': t('계정 ID 형식이 올바르지 않아요(32자리 영문·숫자).', 'Invalid account ID (32 letters/digits).'),
+    'ERR:nokey': t('이 제공자는 키가 필요 없어요.', 'This provider needs no key.'),
   };
   /** 네이티브 저장 실패 → 안내문. "ERR:store:<원인>" 의 원인(예외 이름)은 문제 해결에 쓰이도록 함께 보여 준다 */
   function failText(r) {
@@ -139,11 +123,10 @@ export function openAiSettings(app, opts = {}) {
     if (extraRaw && !extra) { say('err', /^[0-9a-f]{32}$/i.test(k) ? t('계정 ID 칸과 API 토큰 칸이 바뀐 것 같아요. 32자리 값은 “계정 ID” 칸에 넣어 주세요.', 'The account ID and token fields look swapped. Put the 32-character value in the "Account ID" field.') : fail['ERR:badextra']); return; }
     if (!k && !pi.hasKey) { say('err', P.extra && !extra && !pi.extra ? t('계정 ID와 API 토큰을 모두 입력해 주세요.', 'Enter both the account ID and the API token.') : t('API 키를 입력해 주세요.', 'Enter an API key.')); return; }
     if (P.extra && !extra && !pi.extra) { say('err', t('계정 ID를 입력해 주세요(위쪽 “계정 ID” 칸).', 'Enter the account ID (the "Account ID" field above).')); return; }
-    const base = P.customBase ? baseInput.value.trim() : '';
-    const r = bridge.ai.setKey(pid, k, base, extra);
+    const r = bridge.ai.setKey(pid, k, extra);
     if (r !== true) { say('err', failText(r)); return; } // 입력한 키는 그대로 둔다
     keyInput.value = '';
-    pc.resolved = ''; pc.models = []; pc.free = []; pc.meta = {}; testMsg = null;
+    pc.models = []; testMsg = null;
     cfg.provider = pid; // 키를 저장한 제공자를 바로 쓰도록
     app.saveSettings();
     info = bridge.ai.info();
@@ -166,7 +149,7 @@ export function openAiSettings(app, opts = {}) {
     const pc = pcfg(cfg, pid);
     keyMsg = null;
     bridge.ai.clearKey(pid);
-    pc.resolved = ''; pc.models = []; pc.free = []; pc.meta = {}; delete cfg.consents[pid]; testMsg = null;
+    pc.models = []; delete cfg.consents[pid]; delete cfg.consents[pid + ':text']; testMsg = null;
     app.saveSettings();
     info = bridge.ai.info();
     toast(t('키를 삭제했어요', 'Key removed'));
@@ -178,8 +161,7 @@ export function openAiSettings(app, opts = {}) {
     testing = true; testMsg = { kind: 'wait', text: t('연결 확인 중…', 'Checking connection…') }; render();
     try {
       const r = await P.test(pinfo(), { timeoutMs: 40000 });
-      pc.models = r.d.list; pc.free = r.d.free; pc.meta = r.d.meta || {};
-      pc.resolved = r.d.best || ''; // 목록에서 못 찾으면 비워 두어, 다음 요청이 "쓸 모델 없음"을 정확히 알리게 한다
+      pc.models = r.d.list || [];
       app.saveSettings();
       testMsg = { kind: r.kind, text: r.text };
     } catch (e) {
@@ -194,53 +176,55 @@ export function openAiSettings(app, opts = {}) {
     const hasKey = !!pi.hasKey;
     body.append(Chips({ label: t('AI 제공자', 'AI provider'), wrap: true, value: pid, items: PROVIDER_IDS.map((id) => ({ id, label: PROVIDERS[id].short, valueText: PROVIDERS[id].tag() })), onSelect: (id) => { pid = id; cfg.provider = id; app.saveSettings(); testMsg = null; keyMsg = null; storageMsg = null; keyInput.value = ''; render(); } }).el);
     body.append(h('p', { class: 'sheet-note' }, P.desc()));
-    body.append(h('div', { class: 'kv' }, h('span', null, t('API 키', 'API key')), h('b', null, hasKey ? (pi.readable === false ? t('읽을 수 없음', 'Unreadable') : (pi.hint || t('저장됨', 'Saved'))) : t('없음', 'Not set'))));
-    if (hasKey && pi.readable === false) body.append(h('p', { class: 'ai-keymsg err', role: 'alert' }, t('저장된 키를 읽을 수 없어요(기기 보안 저장소가 초기화됐거나 문제가 있어요). 키를 다시 입력해 저장해 주세요.', "The stored key can't be read (the device's secure storage was reset or has a problem). Enter the key again and save.")));
-    if (P.extra) {
-      extraInput.placeholder = P.extra.placeholder();
-      extraInput.value = pi.extra || extraInput.value;
-      body.append(h('div', { class: 'sheet-sec' }, P.extra.label()), extraInput);
-    }
-    keyInput.placeholder = pid === 'openrouter' ? 'sk-or-v1-…' : pid === 'cloudflare' ? t('API 토큰', 'API token') : 'sk-…';
-    body.append(keyInput,
-      h('div', { class: 'row wrap' }, Btn(hasKey ? t('저장 / 바꾸기', 'Save / replace') : t('키 저장', 'Save key'), 'tonal', saveKey, 'key-round'), hasKey ? Btn(t('키 삭제', 'Remove'), 'outlined', clearKey, 'trash-2') : null));
-    if (keyMsg) body.append(h('p', { class: 'ai-keymsg ' + keyMsg.kind, role: keyMsg.kind === 'err' ? 'alert' : 'status' }, keyMsg.text));
-    if (hasKey && pi.prot === 'sw') body.append(h('p', { class: 'sheet-note' }, t('이 기기는 보안 칩 저장소(Keystore)를 쓸 수 없어, 키를 앱 전용 저장소에 암호화해 보관하고 있어요(보호 수준이 조금 낮아요).', "This device can't use the Keystore, so the key is stored encrypted in the app's private storage (slightly lower protection).")));
-    body.append(h('p', { class: 'sheet-note' }, P.howto() + ' ' + t('키는 이 기기의 안전한 저장소(Android Keystore)에 암호화돼 보관되고, 화면(웹) 쪽에서는 다시 읽을 수 없어요.', 'The key is encrypted in the Android Keystore and cannot be read back by the page.')));
-
-    body.append(h('div', { class: 'sheet-sec' }, t('모델', 'Model')));
-    const manual = pc.model !== MODEL_AUTO;
-    body.append(Segmented({ label: t('모델 선택 방식', 'Model selection'), items: [{ id: MODEL_AUTO, label: t('자동 (권장)', 'Auto (recommended)') }, { id: 'manual', label: t('직접 지정', 'Manual') }], value: manual ? 'manual' : MODEL_AUTO,
-      onChange: (v) => { if (v === MODEL_AUTO) pc.model = MODEL_AUTO; else { pc.custom = pc.custom || P.modelPresets[0] || pc.models[0] || P.fallbackModel || ''; pc.model = pc.custom || 'manual'; } app.saveSettings(); render(); } }).el);
-    if (!manual) {
-      const cur = P.autoModel || pc.resolved;
-      const auto = { openai: t('내 키로 쓸 수 있는 가장 새로운 gpt-image 모델을 알아서 골라요.', 'Automatically picks the newest gpt-image model available to your key.'),
-        openrouter: t('지금 쓸 수 있는 가장 새로운 “무료 + 이미지 편집” 모델을 알아서 골라요(첫 요청 때 목록을 조회).', 'Automatically picks the newest free image-editing model (looked up on the first request).'),
-        cloudflare: t('FLUX.2 klein 4B(가볍고 빠름, 무료 한도를 아껴 써요)를 써요.', 'Uses FLUX.2 klein 4B (light and fast; stretches the free allowance).') }[pid];
-      body.append(h('p', { class: 'sheet-note' }, auto + (cur ? ' ' + t('현재: ', 'Current: ') + cur : '')));
+    if (P.noKey) { // Pollinations: 키가 필요 없다
+      body.append(h('div', { class: 'kv' }, h('span', null, t('API 키', 'API key')), h('b', null, t('필요 없음', 'Not needed'))));
+      body.append(h('p', { class: 'sheet-note' }, P.howto()));
     } else {
-      const ids = Array.from(new Set([...(P.modelPresets || []), ...(pc.models || [])]));
-      if (ids.length) body.append(Chips({ label: t('사용 가능한 모델', 'Available models'), wrap: true, value: pc.custom, items: ids.map((m) => ({ id: m, label: m, valueText: isCfGenerateModel(m) ? t('생성 전용', 'text-only') : (pc.free || []).includes(m) ? t('무료', 'free') : undefined })), onSelect: (id) => { pc.custom = id; pc.model = id; customInput.value = id; app.saveSettings(); } }).el);
-      customInput.placeholder = pid === 'openrouter' ? 'vendor/model:free' : pid === 'cloudflare' ? '@cf/black-forest-labs/flux-2-klein-4b' : 'gpt-image-…';
-      customInput.value = pc.custom || '';
-      customInput.onchange = () => { const v = customInput.value.trim().slice(0, 100); pc.custom = v; pc.model = v || MODEL_AUTO; app.saveSettings(); };
-      body.append(customInput);
+      body.append(h('div', { class: 'kv' }, h('span', null, t('API 키', 'API key')), h('b', null, hasKey ? (pi.readable === false ? t('읽을 수 없음', 'Unreadable') : (pi.hint || t('저장됨', 'Saved'))) : t('없음', 'Not set'))));
+      if (hasKey && pi.readable === false) body.append(h('p', { class: 'ai-keymsg err', role: 'alert' }, t('저장된 키를 읽을 수 없어요(기기 보안 저장소가 초기화됐거나 문제가 있어요). 키를 다시 입력해 저장해 주세요.', "The stored key can't be read (the device's secure storage was reset or has a problem). Enter the key again and save.")));
+      if (P.extra) {
+        extraInput.placeholder = P.extra.placeholder();
+        extraInput.value = pi.extra || extraInput.value;
+        body.append(h('div', { class: 'sheet-sec' }, P.extra.label()), extraInput);
+      }
+      keyInput.placeholder = pid === 'modelscope' ? t('ModelScope 액세스 토큰', 'ModelScope access token') : t('API 토큰', 'API token');
+      body.append(keyInput,
+        h('div', { class: 'row wrap' }, Btn(hasKey ? t('저장 / 바꾸기', 'Save / replace') : t('키 저장', 'Save key'), 'tonal', saveKey, 'key-round'), hasKey ? Btn(t('키 삭제', 'Remove'), 'outlined', clearKey, 'trash-2') : null));
+      if (keyMsg) body.append(h('p', { class: 'ai-keymsg ' + keyMsg.kind, role: keyMsg.kind === 'err' ? 'alert' : 'status' }, keyMsg.text));
+      if (hasKey && pi.prot === 'sw') body.append(h('p', { class: 'sheet-note' }, t('이 기기는 보안 칩 저장소(Keystore)를 쓸 수 없어, 키를 앱 전용 저장소에 암호화해 보관하고 있어요(보호 수준이 조금 낮아요).', "This device can't use the Keystore, so the key is stored encrypted in the app's private storage (slightly lower protection).")));
+      body.append(h('p', { class: 'sheet-note' }, P.howto() + ' ' + t('키는 이 기기의 안전한 저장소(Android Keystore)에 암호화돼 보관되고, 화면(웹) 쪽에서는 다시 읽을 수 없어요.', 'The key is encrypted in the Android Keystore and cannot be read back by the page.')));
     }
-    body.append(Btn(testing ? t('확인 중…', 'Checking…') : t('연결 테스트', 'Test connection'), 'outlined', test, 'shield-check'));
-    if (testMsg) body.append(h('p', { class: 'ai-msg ' + testMsg.kind, role: 'status' }, testMsg.text));
 
-    if (P.customBase) {
-      baseInput.value = pi.base && pi.base !== DEFAULT_BASE ? pi.base : baseInput.value;
-      const det = h('details', { class: 'ai-adv' }, h('summary', null, t('고급: 서버 주소', 'Advanced: server address')),
-        h('p', { class: 'sheet-note' }, t('OpenAI 호환 서버를 쓸 때만 바꿔요. 키가 이 서버로 전송돼요. https 공개 도메인만 허용돼요. 바꾼 뒤에는 “저장 / 바꾸기”를 눌러요.', 'Change only for an OpenAI-compatible server. Your key is sent to it. Only public https domains are allowed. Press "Save / replace" afterwards.')), baseInput);
-      if (baseInput.value) det.open = true;
-      body.append(det);
+    if (P.modelPresets.length) { // 모델을 고를 수 있는 제공자(Cloudflare · ModelScope)
+      body.append(h('div', { class: 'sheet-sec' }, t('모델', 'Model')));
+      const manual = pc.model !== MODEL_AUTO;
+      body.append(Segmented({ label: t('모델 선택 방식', 'Model selection'), items: [{ id: MODEL_AUTO, label: t('자동 (권장)', 'Auto (recommended)') }, { id: 'manual', label: t('직접 지정', 'Manual') }], value: manual ? 'manual' : MODEL_AUTO,
+        onChange: (v) => { if (v === MODEL_AUTO) pc.model = MODEL_AUTO; else { pc.custom = pc.custom || P.modelPresets[0] || pc.models[0] || P.fallbackModel || ''; pc.model = pc.custom || 'manual'; } app.saveSettings(); render(); } }).el);
+      if (!manual) {
+        const auto = { cloudflare: t('FLUX.2 klein 4B(가볍고 빠름, 무료 한도를 아껴 써요)를 써요.', 'Uses FLUX.2 klein 4B (light and fast; stretches the free allowance).'),
+          modelscope: t('Qwen-Image 를 써요(문구로 이미지를 만드는 범용 모델).', 'Uses Qwen-Image (a general text-to-image model).') }[pid];
+        body.append(h('p', { class: 'sheet-note' }, auto + ' ' + t('현재: ', 'Current: ') + P.autoModel));
+      } else {
+        const ids = Array.from(new Set([...(P.modelPresets || []), ...(pc.models || [])]));
+        body.append(Chips({ label: t('사용 가능한 모델', 'Available models'), wrap: true, value: pc.custom, items: ids.map((m) => ({ id: m, label: m, valueText: isCfGenerateModel(m) ? t('생성 전용', 'text-only') : undefined })), onSelect: (id) => { pc.custom = id; pc.model = id; customInput.value = id; app.saveSettings(); } }).el);
+        customInput.placeholder = pid === 'modelscope' ? 'Qwen/Qwen-Image' : '@cf/black-forest-labs/flux-2-klein-4b';
+        customInput.value = pc.custom || '';
+        customInput.onchange = () => { const v = customInput.value.trim().slice(0, 100); pc.custom = v; pc.model = v || MODEL_AUTO; app.saveSettings(); };
+        body.append(customInput);
+      }
     }
-    const ts = h('details', { class: 'ai-adv' }, h('summary', null, t('문제 해결', 'Troubleshooting')),
-      h('p', { class: 'sheet-note' }, t('키가 저장되지 않거나 사라질 때 눌러 보세요. 이 기기의 키 보관(암호화) 기능이 정상인지 확인해요. 키 값은 쓰지 않아요.', "Tap this if the key won't save or disappears. It checks that this device's key storage works. Your key isn't used.")),
-      Btn(t('보관 기능 점검', 'Check key storage'), 'outlined', checkStorage, 'shield-check'));
-    if (storageMsg) { ts.append(h('p', { class: 'ai-keymsg ' + storageMsg.kind, role: 'status' }, storageMsg.text)); ts.open = true; }
-    body.append(ts);
+    if (P.test) {
+      body.append(Btn(testing ? t('확인 중…', 'Checking…') : t('연결 테스트', 'Test connection'), 'outlined', test, 'shield-check'));
+      if (testMsg) body.append(h('p', { class: 'ai-msg ' + testMsg.kind, role: 'status' }, testMsg.text));
+    }
+
+    if (!P.noKey) {
+      const ts = h('details', { class: 'ai-adv' }, h('summary', null, t('문제 해결', 'Troubleshooting')),
+        h('p', { class: 'sheet-note' }, t('키가 저장되지 않거나 사라질 때 눌러 보세요. 이 기기의 키 보관(암호화) 기능이 정상인지 확인해요. 키 값은 쓰지 않아요.', "Tap this if the key won't save or disappears. It checks that this device's key storage works. Your key isn't used.")),
+        Btn(t('보관 기능 점검', 'Check key storage'), 'outlined', checkStorage, 'shield-check'));
+      if (storageMsg) { ts.append(h('p', { class: 'ai-keymsg ' + storageMsg.kind, role: 'status' }, storageMsg.text)); ts.open = true; }
+      body.append(ts);
+    }
     body.append(h('p', { class: 'sheet-note' }, privacyNote(pid)));
   }
 

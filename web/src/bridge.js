@@ -105,10 +105,10 @@ export const bridge = {
    */
   ai: {
     available() { return !!(A && A.aiInfo); },
-    /** {v:2, providers:{openai:{hasKey,hint,base,extra}, openrouter:{…}, cloudflare:{…}}} (키 자체는 없음) */
+    /** {v:3, providers:{cloudflare:{hasKey,hint,extra,readable,prot}, pollinations:{…}, modelscope:{…}}} (키 자체는 없음 — pollinations 는 키가 필요 없다) */
     info() { try { return A && A.aiInfo ? JSON.parse(A.aiInfo()) : null; } catch (e) { return null; } },
-    /** key 가 빈 문자열이면 키는 유지하고 서버 주소(openai)/부가 값(cloudflare 계정 ID)만 바꾼다. 성공 true, 실패 시 사유 문자열 */
-    setKey(provider, key, base, extra) { const r = A.aiSetKey(provider, key || '', base || '', extra || ''); return r === 'OK' ? true : String(r || 'ERR:unknown'); },
+    /** key 가 빈 문자열이면 키는 유지하고 부가 값(cloudflare 계정 ID)만 바꾼다. 성공 true, 실패 시 사유 문자열("ERR:badkey" · "ERR:badextra" · "ERR:nokey" · "ERR:store:<원인>" …) */
+    setKey(provider, key, extra) { const r = A.aiSetKey(provider, key || '', extra || ''); return r === 'OK' ? true : String(r || 'ERR:unknown'); },
     clearKey(provider) { A.aiClearKey(provider); },
     /** 키 보관(암호화) 방식 점검 결과 "hw=ok sw=ok" (없으면 ''). 키 값은 쓰지 않는다 */
     selfTest() { try { return A && A.aiSelfTest ? String(A.aiSelfTest() || '') : ''; } catch (e) { return ''; } },

@@ -1,4 +1,4 @@
-// AI 수정(영역 선택 · 요청 계획 · OpenAI 요청/오류) 순수 로직 단위 테스트. 실행: node web/tests/ai.unit.mjs
+// AI 기능(영역 선택 · 요청 계획 · Cloudflare / Pollinations / ModelScope 요청·응답·오류) 순수 로직 단위 테스트. 실행: node web/tests/ai.unit.mjs
 import {
   newMask, rasterPolygon, rectPts, ellipsePts, combine, stampOp, strokeOp, invertMask, bboxOf, coverage,
   growMask, featherU8, sampleMask, contourSegments,
@@ -6,10 +6,11 @@ import {
 import {
   SIZES, pickSize, planRequest, layerPlacement, rectToCrop, placeInCanvas, apiMaskRGBA, toneOffsets, buildPatch, featherSigma,
 } from '../src/ai/plan.js';
-import { pickBestImageModel, listImageModels, wrapPrompt, buildMultipart, buildEditRequest, explainError, cleanKey } from '../src/ai/openai.js';
+import { buildMultipart, explainError, cleanKey, MODEL_AUTO } from '../src/ai/common.js';
 import {
-  PROVIDERS, PROVIDER_IDS, SIZES_FREE, SIZES_CF, CF_MODELS, CF_GENERATE_MODELS, CF_MODEL_RE, isCfGenerateModel, modelProfile, hasHangul, translateToEnglish, parseAccountId, blobToBase64, base64ToBlob, dataUrlToBlob, sniffType, instruct,
-  extractOpenRouterImages, parseOpenRouterModels, pickFreeImageModel, orderOpenRouterModels, parseCfModels, parseCloudflareImage,
+  PROVIDERS, PROVIDER_IDS, getProvider, SIZES_FREE, SIZES_CF, SIZES_PLN, CF_MODELS, CF_GENERATE_MODELS, CF_MODEL_RE, isCfGenerateModel, modelProfile, hasHangul, translateToEnglish, parseAccountId,
+  base64ToBlob, sniffType, ensureImageBlob, instruct, parseCfModels, parseCloudflareImage, encodePromptPath, pollinationsPath,
+  MS_MODELS, MS_MODEL_RE, parseModelScopeTask, modelscopeGenerate, sleepAbortable,
 } from '../src/ai/providers.js';
 import { AiError } from '../src/ai/client.js';
 import { aiConfig, pcfg } from '../src/tools/aisettings.js';
@@ -191,65 +192,69 @@ section('plan: placement / masks / tone / patch');
   ok(featherSigma(0, { w: 4000, h: 3000 }, 1) === 0, 'feather 0 → sigma 0');
 }
 
-section('openai: models / prompt / multipart');
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+const JPG = () => new Blob([Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70])], { type: 'image/jpeg' });
+const jsonRes = (o) => ({ blob: new Blob([JSON.stringify(o)], { type: 'application/json' }), ctype: 'application/json' });
+const imgRes = (ctype = 'application/octet-stream') => ({ blob: new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4])], { type: ctype }), ctype });
+/** 호출을 기록하고, 차례대로 준비한 응답을 돌려주는 가짜 릴레이 (마지막 응답을 반복) */
+function scripted(steps) {
+  const calls = []; let i = 0;
+  const relay = async (provider, req, opts) => { calls.push({ provider, req, opts }); const st = steps[Math.min(i++, steps.length - 1)]; return typeof st === 'function' ? st(provider, req, opts) : st; };
+  relay.calls = calls;
+  return relay;
+}
+const throwsAi = async (fn) => { try { await fn(); } catch (e) { return e; } return null; };
+
+section('common: multipart');
 {
-  ok(pickBestImageModel(['gpt-4o', 'gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-2', 'gpt-image-2-2026-01-01']) === 'gpt-image-2', 'best model = newest');
-  ok(pickBestImageModel(['gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5']) === 'gpt-image-1.5', 'best model 1.5 > 1');
-  ok(pickBestImageModel(['gpt-image-1-mini', 'gpt-image-1']) === 'gpt-image-1', 'prefer full over mini at same version');
-  ok(pickBestImageModel(['gpt-image-1-2025-04-15', 'gpt-image-1']) === 'gpt-image-1', 'prefer alias over dated snapshot');
-  ok(pickBestImageModel(['gpt-image-1-mini']) === 'gpt-image-1-mini', 'mini only');
-  ok(pickBestImageModel(['dall-e-3', 'gpt-4o']) === null && pickBestImageModel([]) === null && pickBestImageModel(null) === null, 'no image models → null');
-  ok(pickBestImageModel(['gpt-image-10', 'gpt-image-9']) === 'gpt-image-10', 'numeric (not lexicographic) version order');
-  const list = listImageModels(['gpt-4o', 'gpt-image-1', 'gpt-image-1.5', 'gpt-image-1-mini', 'chatgpt-image-latest']);
-  ok(list.join() === 'gpt-image-1.5,gpt-image-1,gpt-image-1-mini', 'listImageModels order', list.join());
-
-  const wp = wrapPrompt('  셔츠를 파란색으로  ');
-  ok(wp.startsWith('셔츠를 파란색으로\n') && /masked/.test(wp) && /unchanged/.test(wp), 'wrapPrompt');
-  ok(wrapPrompt('x'.repeat(5000)).split('\n')[0].length === 1500, 'wrapPrompt truncates');
-
   const png = new Blob([Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 1, 2, 3, 255, 13, 10, 45, 45])], { type: 'image/png' });
-  const mask = new Blob([Uint8Array.from([137, 80, 78, 71, 9, 9, 9])], { type: 'image/png' });
-  const req = buildEditRequest({ model: 'gpt-image-1', prompt: '한글 프롬프트\n두 번째 줄', size: '1536x1024', quality: 'high', n: 2 }, png, mask);
-  ok(req.method === 'POST' && req.path === '/images/edits' && /^multipart\/form-data; boundary=/.test(req.contentType), 'edit request shape');
-  const fd = await new Response(req.body, { headers: { 'content-type': req.contentType } }).formData();
-  ok(fd.get('model') === 'gpt-image-1' && fd.get('size') === '1536x1024' && fd.get('quality') === 'high' && fd.get('n') === '2', 'multipart fields');
-  ok(String(fd.get('prompt')).startsWith('한글 프롬프트\n두 번째 줄') && /masked/.test(String(fd.get('prompt'))), 'multipart prompt (UTF-8, newline)');
-  const fimg = fd.get('image'), fmask = fd.get('mask');
-  ok(fimg.name === 'image.png' && fimg.type === 'image/png' && fimg.size === png.size, 'multipart image part');
-  ok(fmask.name === 'mask.png' && fmask.size === mask.size, 'multipart mask part');
-  const got = new Uint8Array(await fimg.arrayBuffer()), exp = new Uint8Array(await png.arrayBuffer());
+  const mp = buildMultipart({ prompt: '한글 프롬프트\n두 번째 줄', width: '960', skip: null }, [{ name: 'input_image_0', filename: 'image.png', type: 'image/png', blob: png }]);
+  ok(/^multipart\/form-data; boundary=/.test(mp.contentType) && mp.contentType.endsWith(mp.boundary), 'content-type carries the boundary');
+  const fd = await new Response(mp.body, { headers: { 'content-type': mp.contentType } }).formData();
+  ok(fd.get('prompt') === '한글 프롬프트\n두 번째 줄' && fd.get('width') === '960' && !fd.has('skip'), 'fields: UTF-8, newline, null skipped');
+  const f = fd.get('input_image_0');
+  ok(f.name === 'image.png' && f.type === 'image/png' && f.size === png.size, 'file part name/type/size');
+  const got = new Uint8Array(await f.arrayBuffer()), exp = new Uint8Array(await png.arrayBuffer());
   ok(got.length === exp.length && got.every((v, i) => v === exp[i]), 'binary part bytes intact (incl. CRLF-like bytes)');
-  const mp = buildMultipart({ a: '1', b: null }, []);
-  const fd2 = await new Response(mp.body, { headers: { 'content-type': mp.contentType } }).formData();
-  ok(fd2.get('a') === '1' && !fd2.has('b'), 'null fields skipped');
+  const mp2 = buildMultipart({ a: '1' }, []);
+  const fd2 = await new Response(mp2.body, { headers: { 'content-type': mp2.contentType } }).formData();
+  ok(fd2.get('a') === '1' && mp2.boundary !== mp.boundary, 'no files + unique boundaries');
 }
 
-section('openai: errors / key');
+section('common: errors / key');
 {
   const k = (e) => explainError(e).key;
-  ok(k({ status: 401, code: 'invalid_api_key' }) === 'key' && explainError({ status: 401 }).settings, '401 → key');
-  ok(k({ status: 403, message: 'Your organization must be verified to use the model `gpt-image-1`.' }) === 'verify', '403 verify');
-  ok(k({ status: 403, message: 'forbidden' }) === 'forbidden', '403 other');
-  ok(k({ status: 404, code: 'model_not_found' }) === 'model', '404 → model');
-  ok(k({ status: 429, code: 'insufficient_quota' }) === 'quota', '429 quota');
-  ok(k({ status: 429, code: 'rate_limit_exceeded' }) === 'rate', '429 rate');
-  ok(k({ status: 400, code: 'moderation_blocked', message: 'Your request was rejected by the safety system.' }) === 'policy', '400 moderation');
+  ok(k({ status: 401, code: 'invalid_api_key' }) === 'key' && explainError({ status: 401 }).settings, '401 → key (opens settings)');
+  ok(k({ status: 403, message: 'forbidden' }) === 'forbidden' && explainError({ status: 403 }).settings, '403 → forbidden');
+  ok(k({ status: 404, code: 'model_not_found' }) === 'model' && k({ status: 400, message: 'x is not a valid model ID' }) === 'model' && k({ status: 404, code: '404', message: 'No endpoints found for x/y' }) === 'model', 'model errors');
+  ok(k({ status: 429, message: 'quota exceeded' }) === 'quota' && k({ status: 429, code: 'rate_limit_exceeded' }) === 'rate' && k({ status: 402 }) === 'quota', '429 quota / rate, 402 → credits');
+  ok(k({ status: 400, code: 'moderation_blocked', message: 'Your request was rejected by the safety system.' }) === 'policy' && k({ status: 403, code: '403', message: 'Your input was flagged by moderation' }) === 'policy', 'moderation (also before the generic 403)');
   ok(k({ status: 500 }) === 'server' && k({ status: 503 }) === 'server', '5xx');
-  ok(k({ status: 0, code: 'network' }) === 'offline' && k({ code: 'offline' }) === 'offline', 'offline');
-  ok(k({ code: 'timeout' }) === 'timeout' && k({ code: 'cancelled' }) === 'cancelled' && k({ code: 'tls' }) === 'tls', 'timeout/cancel/tls');
+  ok(k({ status: 0, code: 'network' }) === 'offline' && k({ code: 'offline' }) === 'offline' && explainError(null).key === 'offline', 'offline / null does not throw');
+  ok(k({ code: 'timeout' }) === 'timeout' && k({ code: 'cancelled' }) === 'cancelled' && k({ code: 'tls' }) === 'tls', 'timeout / cancel / tls');
   ok(k({ code: 'bad_response', status: 200 }) === 'bad', 'bad response');
   const o = explainError({ status: 400, code: 'invalid_value', message: 'Invalid size' });
   ok(o.key === 'other' && /400/.test(o.text) && /Invalid size/.test(o.text), 'other keeps status + message');
-  ok(explainError(null).key === 'offline', 'null error does not throw');
-  ok(cleanKey(' sk-proj-abc123 \n') === 'sk-proj-abc123' && cleanKey('short') === '' && cleanKey('한글키한글키한글키한글키') === '' && cleanKey('a'.repeat(500)) === '', 'cleanKey');
-  // 붙여넣기 정리: Bearer 접두사·따옴표·쉼표·보이지 않는 문자
-  ok(cleanKey('Bearer sk-or-v1-abcdef123456') === 'sk-or-v1-abcdef123456' && cleanKey('  bearer   sk-or-v1-abcdef123456  ') === 'sk-or-v1-abcdef123456', 'cleanKey: "Bearer " prefix');
-  ok(cleanKey('Authorization: Bearer cfut_abcdef123456') === 'cfut_abcdef123456' && cleanKey('authorization:bearer cfut_abcdef123456') === 'cfut_abcdef123456', 'cleanKey: whole header pasted');
-  ok(cleanKey('"sk-proj-abc123"') === 'sk-proj-abc123' && cleanKey('\u201csk-proj-abc123\u201d,') === 'sk-proj-abc123' && cleanKey("'sk-proj-abc123';") === 'sk-proj-abc123', 'cleanKey: quotes / trailing comma');
-  ok(cleanKey('sk-proj-\u200babc\u200d123\ufeff') === 'sk-proj-abc123' && cleanKey('sk-proj-abc\n123') === 'sk-proj-abc123', 'cleanKey: zero-width characters and inner line breaks');
-  ok(cleanKey('Bearersk-proj-abc123') === 'Bearersk-proj-abc123', 'cleanKey: only strips "Bearer" followed by whitespace (a key may start with those letters)');
-  ok(cleanKey('sk-…abcd') === '' && cleanKey('') === '' && cleanKey(null) === '' && cleanKey(undefined) === '', 'cleanKey: ellipsis / empty / null');
+  // Cloudflare
+  ok(k({ status: 429, code: 'cf_3036', message: 'you have used up your daily free allocation of 10,000 neurons' }) === 'freequota' && k({ status: 429, code: 'cf_3036' }) === 'freequota', 'cloudflare daily free allocation (3036)');
+  ok(k({ status: 403, code: 'cf_5035', message: 'This model requires the Workers Paid plan' }) === 'paidplan' && explainError({ status: 403, code: 'cf_5035' }).settings, 'cloudflare paid-plan-only model (5035)');
+  ok(k({ status: 429, code: 'cf_3040', message: 'Out of capacity' }) === 'capacity', 'cloudflare out of capacity (3040)');
+  ok(k({ code: 'no_account' }) === 'account' && explainError({ code: 'no_account' }).settings && k({ code: 'no_key' }) === 'key', 'missing account ID / key → open settings');
+  // Pollinations / ModelScope
+  ok(k({ status: 429, code: 'rate_free' }) === 'ratefree' && k({ status: 402, code: 'rate_free' }) === 'ratefree' && /45/.test(explainError({ code: 'rate_free' }).text), 'Pollinations free rate limit → "one image per ~45 s"');
+  const tf = explainError({ code: 'task_failed', status: 200, message: 'content blocked' });
+  ok(tf.key === 'taskfail' && /content blocked/.test(tf.text) && k({ code: 'task_failed' }) === 'taskfail', 'ModelScope task failed keeps the reason');
+  ok(k({ code: 'no_task', status: 200 }) === 'notask' && k({ code: 'no_image', message: 'I cannot' }) === 'noimage' && /I cannot/.test(explainError({ code: 'no_image', message: 'I cannot' }).text), 'no task id / no image (message kept)');
   ok(k({ status: 401, code: 'key_unreadable' }) === 'keyread' && explainError({ status: 401, code: 'key_unreadable' }).settings && k({ status: 401, code: 'no_key' }) === 'key', 'unreadable stored key → "save the key again", distinct from "no key"');
+  ok(!('verify' in { [k({ status: 403, message: 'Your organization must be verified' })]: 1 }), 'no OpenAI-specific "verify" mapping any more');
+  // 키 정리
+  ok(cleanKey(' cfut_abc12345 \n') === 'cfut_abc12345' && cleanKey('short') === '' && cleanKey('한글키한글키한글키한글키') === '' && cleanKey('a'.repeat(500)) === '', 'cleanKey basics');
+  ok(cleanKey('Bearer ms-1a2b3c4d-5e6f') === 'ms-1a2b3c4d-5e6f' && cleanKey('  bearer   ms-1a2b3c4d-5e6f  ') === 'ms-1a2b3c4d-5e6f', 'cleanKey: "Bearer " prefix');
+  ok(cleanKey('Authorization: Bearer cfut_abcdef123456') === 'cfut_abcdef123456' && cleanKey('authorization:bearer cfut_abcdef123456') === 'cfut_abcdef123456', 'cleanKey: whole header pasted');
+  ok(cleanKey('"cfut_abc12345"') === 'cfut_abc12345' && cleanKey('“cfut_abc12345”,') === 'cfut_abc12345' && cleanKey("'cfut_abc12345';") === 'cfut_abc12345', 'cleanKey: quotes / trailing comma');
+  ok(cleanKey('cfut_​abc‍12345﻿') === 'cfut_abc12345' && cleanKey('cfut_abc\n12345') === 'cfut_abc12345', 'cleanKey: zero-width characters and inner line breaks');
+  ok(cleanKey('Bearercfut_abc12345') === 'Bearercfut_abc12345', 'cleanKey: only strips "Bearer" followed by whitespace');
+  ok(cleanKey('cfut_…abcd') === '' && cleanKey('') === '' && cleanKey(null) === '' && cleanKey(undefined) === '', 'cleanKey: ellipsis / empty / null');
 }
 
 section('cloudflare account ID: pasted text');
@@ -266,89 +271,53 @@ section('cloudflare account ID: pasted text');
 section('providers: binary helpers');
 {
   const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 1, 2, 3, 250, 251, 252]);
-  const b64 = await blobToBase64(new Blob([png]));
-  ok(b64 === Buffer.from(png).toString('base64'), 'blobToBase64 matches Buffer');
-  const back = base64ToBlob(b64, 'application/octet-stream');
-  ok(back.type === 'image/png' && new Uint8Array(await back.arrayBuffer()).every((v, i) => v === png[i]), 'base64ToBlob sniffs PNG + roundtrips');
-  ok(sniffType(Uint8Array.from([0xff, 0xd8, 1])) === 'image/jpeg' && sniffType(Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50])) === 'image/webp' && sniffType(Uint8Array.from([1, 2, 3])) === null, 'sniffType');
-  const big = new Uint8Array(300000).map((_, i) => (i * 7) & 255); big.set([0x89, 0x50, 0x4e, 0x47]);
-  const bb = await blobToBase64(new Blob([big]));
-  ok(bb === Buffer.from(big).toString('base64'), 'blobToBase64 handles large blobs (chunked)');
-  const du = dataUrlToBlob('data:image/png;base64,' + b64);
-  ok(du && du.type === 'image/png' && du.size === png.length, 'dataUrlToBlob');
-  ok(dataUrlToBlob('data:text/plain,hello') === null && dataUrlToBlob('http://x/y.png') === null && dataUrlToBlob(null) === null, 'dataUrlToBlob rejects non-base64 / non-data');
+  const back = base64ToBlob(Buffer.from(png).toString('base64'), 'application/octet-stream');
+  ok(back.type === 'image/png' && back.size === png.length && new Uint8Array(await back.arrayBuffer()).every((v, i) => v === png[i]), 'base64ToBlob sniffs PNG + roundtrips');
+  ok(base64ToBlob('AQID', 'image/x-foo').type === 'image/x-foo' && base64ToBlob('AQID').type === 'application/octet-stream', 'unknown bytes keep the given type');
+  ok(sniffType(Uint8Array.from([0xff, 0xd8, 1])) === 'image/jpeg' && sniffType(Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50])) === 'image/webp' && sniffType(Uint8Array.from([1, 2, 3])) === null && sniffType(new Uint8Array(0)) === null, 'sniffType');
+  const e1 = await ensureImageBlob(new Blob([png], { type: 'application/octet-stream' }));
+  ok(e1.type === 'image/png' && e1.size === png.length, 'ensureImageBlob: re-types by magic bytes (Content-Type is not trusted)');
+  const jpg = JPG();
+  ok((await ensureImageBlob(jpg)) === jpg, 'ensureImageBlob: correct type → same blob');
+  const jpgWrong = await ensureImageBlob(new Blob([await jpg.arrayBuffer()], { type: 'text/html' }));
+  ok(jpgWrong.type === 'image/jpeg', 'ensureImageBlob: JPEG labelled as HTML is still accepted');
+  const t1 = await throwsAi(() => ensureImageBlob(new Blob(['Rate limit reached, try later'], { type: 'text/plain' })));
+  ok(t1 instanceof AiError && t1.info.code === 'no_image' && t1.info.message === 'Rate limit reached, try later', 'plain text body → no_image with the text as the hint');
+  const t2 = await throwsAi(() => ensureImageBlob(new Blob(['<html><body>blocked</body></html>'], { type: 'text/html' })));
+  const t3 = await throwsAi(() => ensureImageBlob(new Blob(['{"error":"x"}'], { type: 'application/json' })));
+  const t4 = await throwsAi(() => ensureImageBlob(new Blob([])));
+  ok(t2.info.code === 'no_image' && t2.info.message === '' && t3.info.code === 'no_image' && t3.info.message === '' && t4.info.code === 'no_image', 'HTML / JSON / empty body → no_image without leaking markup');
 }
 
-section('providers: OpenRouter parse / models');
-{
-  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-  const r1 = extractOpenRouterImages({ choices: [{ message: { role: 'assistant', content: 'done', images: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,' + PNG } }] } }] });
-  ok(r1.length === 1 && r1[0].type === 'image/png' && r1[0].size > 50, 'message.images[] data URL');
-  const r2 = extractOpenRouterImages({ choices: [{ message: { content: [{ type: 'text', text: 'x' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,' + PNG } }] } }] });
-  ok(r2.length === 1, 'content[] image_url part');
-  const r3 = extractOpenRouterImages({ choices: [{ message: { content: 'here ![img](data:image/png;base64,' + PNG + ') ok' } }] });
-  ok(r3.length === 1, 'markdown data URL in text content');
-  ok(extractOpenRouterImages({ choices: [{ message: { content: 'sorry, text only' } }] }).length === 0 && extractOpenRouterImages({}).length === 0 && extractOpenRouterImages(null).length === 0, 'no images → empty');
-  ok(extractOpenRouterImages({ choices: [{ message: { images: [{ image_url: { url: 'https://x/y.png' } }] } }] }).length === 0, 'remote URLs are ignored (only data URLs)');
-
-  const models = { data: [
-    { id: 'a/text-only', created: 5, architecture: { input_modalities: ['text'], output_modalities: ['text'] }, pricing: { prompt: '0', completion: '0' } },
-    { id: 'old/img-edit:free', created: 100, architecture: { input_modalities: ['image', 'text'], output_modalities: ['image', 'text'] }, pricing: { prompt: '0', completion: '0' } },
-    { id: 'new/img-edit:free', created: 300, architecture: { input_modalities: ['image', 'text'], output_modalities: ['image'] }, pricing: { prompt: '0', completion: '0' } },
-    { id: 'zero/priced', created: 250, architecture: { input_modalities: ['image', 'text'], output_modalities: ['image', 'text'] }, pricing: { prompt: '0', completion: '0', image: '0', request: '0' } },
-    { id: 'free/t2i-only:free', created: 400, architecture: { input_modalities: ['text'], output_modalities: ['image'] }, pricing: { prompt: '0', completion: '0' } },
-    { id: 'paid/nano', created: 500, architecture: { input_modalities: ['image', 'text'], output_modalities: ['image', 'text'] }, pricing: { prompt: '0.0000003', completion: '0.0000025', image: '0.001', request: '0' } },
-    { id: 'half/zero', created: 260, architecture: { input_modalities: ['image'], output_modalities: ['image'] }, pricing: { prompt: '0', completion: '0.00002' } },
-    { name: 'broken' }, null,
-  ] };
-  const list = parseOpenRouterModels(models);
-  ok(list.map((m) => m.id).join() === 'paid/nano,free/t2i-only:free,new/img-edit:free,half/zero,zero/priced,old/img-edit:free', 'image-output models only, newest first', list.map((m) => m.id).join());
-  const by = Object.fromEntries(list.map((m) => [m.id, m]));
-  ok(by['new/img-edit:free'].free && by['zero/priced'].free && !by['paid/nano'].free && !by['half/zero'].free, 'free = :free suffix or all-zero pricing');
-  ok(by['paid/nano'].edit && !by['free/t2i-only:free'].edit, 'edit = image input supported');
-  ok(pickFreeImageModel(list) === 'new/img-edit:free', 'auto pick = newest FREE model that accepts image input (skips text-to-image only)');
-  ok(pickFreeImageModel([]) === null && pickFreeImageModel(null) === null && pickFreeImageModel(list.filter((m) => !m.free)) === null, 'no free edit model → null');
-  const ord = orderOpenRouterModels(list);
-  ok(ord.meta['new/img-edit:free'].join() === 'image' && ord.meta['paid/nano'].join() === 'image,text' && Object.keys(ord.meta).length === ord.ids.length, 'meta carries each model\'s output modalities');
-  ok(ord.ids.join() === 'new/img-edit:free,zero/priced,old/img-edit:free,paid/nano,half/zero' && ord.free.join() === 'new/img-edit:free,zero/priced,old/img-edit:free', 'UI order: free edit models first', ord.ids.join());
-}
-
-section('providers: OpenRouter / Cloudflare request builders');
+section('providers: Cloudflare request builders / parse');
 {
   const img = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])], { type: 'image/png' });
   const marked = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 9, 9, 9, 9])], { type: 'image/png' });
-  const OR = PROVIDERS.openrouter;
-  const req = await OR.buildEdit({ model: 'new/img-edit:free', prompt: '  셔츠를 파란색으로  ', size: SIZES_FREE[0], quality: 'high', n: 3 }, { image: img, marked });
-  ok(req.method === 'POST' && req.path === '/chat/completions' && req.contentType === 'application/json', 'openrouter request shape');
-  const body = JSON.parse(await req.body.text());
-  ok(body.model === 'new/img-edit:free' && body.stream === false && body.modalities.join() === 'image,text', 'openrouter body: model / modalities / non-stream');
-  const parts = body.messages[0].content;
-  ok(parts.length === 3 && parts[0].type === 'text' && /Image 1/.test(parts[0].text) && /Image 2/.test(parts[0].text) && /셔츠를 파란색으로$/.test(parts[0].text), 'openrouter prompt = instruction + user request');
-  ok(parts[1].image_url.url === 'data:image/png;base64,' + Buffer.from(await img.arrayBuffer()).toString('base64') && parts[2].image_url.url.startsWith('data:image/png;base64,'), 'openrouter images as data URLs (original, marked)');
-  ok(!('n' in body) && !('quality' in body), 'openrouter body has no OpenAI-only params');
-  const reqImgOnly = await OR.buildEdit({ model: 'img/only', prompt: 'x', size: SIZES_FREE[0], outputs: ['image'] }, { image: img, marked });
-  ok(JSON.parse(await reqImgOnly.body.text()).modalities.join() === 'image', 'image-only models are asked for modalities ["image"]');
-  const reqBoth = await OR.buildEdit({ model: 'img/both', prompt: 'x', size: SIZES_FREE[0], outputs: ['image', 'text'] }, { image: img, marked });
-  ok(JSON.parse(await reqBoth.body.text()).modalities.join() === 'image,text', 'image+text models keep both modalities');
-
   const CF = PROVIDERS.cloudflare;
-  const creq = await CF.buildEdit({ model: CF_MODELS[0], prompt: '하늘을 바꿔 주세요', size: SIZES_CF[1], quality: 'low', n: 1 }, { image: img, marked });
-  ok(creq.method === 'POST' && creq.path === '/accounts/{account}/ai/run/@cf/black-forest-labs/flux-2-klein-4b' && /^multipart\/form-data; boundary=/.test(creq.contentType), 'cloudflare request shape (account placeholder)');
+  const creq = await CF.buildEdit({ model: CF_MODELS[0], prompt: '하늘을 바꿔 주세요', size: SIZES_CF[1] }, { image: img, marked });
+  ok(creq.method === 'POST' && creq.path === '/accounts/{account}/ai/run/@cf/black-forest-labs/flux-2-klein-4b' && /^multipart\/form-data; boundary=/.test(creq.contentType), 'edit request shape (account placeholder)');
   const fd = await new Response(creq.body, { headers: { 'content-type': creq.contentType } }).formData();
-  ok(fd.get('width') === '960' && fd.get('height') === '640' && String(fd.get('prompt')).includes('하늘을 바꿔 주세요') && /Image 2/.test(String(fd.get('prompt'))), 'cloudflare fields: output size = 2× input class, prompt');
-  ok(fd.get('input_image_0').size === img.size && fd.get('input_image_1').size === marked.size && fd.get('input_image_0').type === 'image/png', 'cloudflare input_image_0/1');
-  let threw = null; try { await CF.buildEdit({ model: '@cf/../evil', prompt: 'x', size: SIZES_CF[0] }, { image: img, marked }); } catch (e) { threw = e; }
-  ok(threw instanceof AiError && threw.info.status === 404, 'cloudflare rejects malformed model names');
+  ok(fd.get('width') === '960' && fd.get('height') === '640' && String(fd.get('prompt')).includes('하늘을 바꿔 주세요') && /Image 2/.test(String(fd.get('prompt'))), 'fields: output size = 2× input class, prompt');
+  ok(fd.get('input_image_0').size === img.size && fd.get('input_image_1').size === marked.size && fd.get('input_image_0').type === 'image/png', 'input_image_0 / input_image_1');
+  const bad = await throwsAi(() => CF.buildEdit({ model: '@cf/../evil', prompt: 'x', size: SIZES_CF[0] }, { image: img, marked }));
+  ok(bad instanceof AiError && bad.info.status === 404, 'rejects malformed model names');
   ok(CF_MODEL_RE.test('@cf/black-forest-labs/flux-2-dev') && !CF_MODEL_RE.test('@cf/a/b/c') && !CF_MODEL_RE.test('@hf/a/b') && !CF_MODEL_RE.test('@cf/./b'), 'CF_MODEL_RE');
-  const oreq = await PROVIDERS.openai.buildEdit({ model: 'gpt-image-1', prompt: 'x', size: SIZES[1], quality: 'low', n: 2 }, { image: img, mask: marked });
-  const ofd = await new Response(oreq.body, { headers: { 'content-type': oreq.contentType } }).formData();
-  ok(oreq.path === '/images/edits' && ofd.get('size') === '1536x1024' && ofd.get('n') === '2' && ofd.get('mask').size === marked.size, 'openai builder unchanged through the provider interface');
   ok(/Image 1/.test(instruct('x')) && /magenta/.test(instruct('x')) && instruct('y'.repeat(5000)).split('Request: ')[1].length === 1500, 'instruct text + truncation');
-}
 
-section('providers: Cloudflare parse / models');
-{
-  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const relayImg = scripted([jsonRes({ result: { image: PNG }, success: true })]);
+  const edited = await CF.edit(creq, { tag: 1 }, relayImg);
+  ok(edited.length === 1 && edited[0].type === 'image/png' && relayImg.calls[0].provider === 'cloudflare' && relayImg.calls[0].req === creq && relayImg.calls[0].opts.tag === 1, 'edit(): relays the request and parses the image');
+
+  const gRelay = scripted([jsonRes({ result: { image: PNG }, success: true })]);
+  const gen = await CF.generate({ model: CF_GENERATE_MODELS[0], prompt: 'a red boat' }, {}, gRelay);
+  const gc = gRelay.calls[0];
+  ok(gen.length === 1 && gen[0].type === 'image/png' && gc.provider === 'cloudflare' && gc.req.method === 'POST' && gc.req.path === '/accounts/{account}/ai/run/@cf/black-forest-labs/flux-1-schnell' && gc.req.contentType === 'application/json' && JSON.parse(await gc.req.body.text()).prompt === 'a red boat', 'generate(): JSON prompt only (no photo)');
+  const gBad = await throwsAi(() => CF.generate({ model: 'nope', prompt: 'x' }, {}, gRelay));
+  ok(gBad instanceof AiError && gBad.info.status === 404 && gRelay.calls.length === 1, 'generate(): invalid model rejected before any request');
+  const longGen = scripted([jsonRes({ result: { image: PNG } })]);
+  await CF.generate({ model: CF_GENERATE_MODELS[0], prompt: 'x'.repeat(5000) }, {}, longGen);
+  ok(JSON.parse(await longGen.calls[0].req.body.text()).prompt.length === 2000, 'generate(): prompt capped at 2000 chars');
+
   const j = (o) => new Blob([JSON.stringify(o)], { type: 'application/json' });
   const a = await parseCloudflareImage(j({ result: { image: PNG }, success: true, errors: [], messages: [] }), 'application/json');
   ok(a.length === 1 && a[0].type === 'image/png' && a[0].size > 50, 'result.image base64 → PNG blob');
@@ -356,74 +325,204 @@ section('providers: Cloudflare parse / models');
   ok(b.length === 1, 'result.images[0]');
   const raw = new Blob([Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1])], { type: 'image/png' });
   ok((await parseCloudflareImage(raw, 'image/png'))[0] === raw, 'binary image response passes through');
-  let e1 = null; try { await parseCloudflareImage(j({ success: false, errors: [{ code: 3036, message: 'you have used up your daily free allocation' }], result: null }), 'application/json'); } catch (e) { e1 = e; }
+  const e1 = await throwsAi(() => parseCloudflareImage(j({ success: false, errors: [{ code: 3036, message: 'you have used up your daily free allocation' }], result: null }), 'application/json'));
   ok(e1 instanceof AiError && e1.info.code === 'cf_3036' && explainError(e1.info).key === 'freequota', 'success:false → AiError that explains as free-quota');
-  let e2 = null; try { await parseCloudflareImage(j({ success: true, result: {} }), 'application/json'); } catch (e) { e2 = e; }
+  const e2 = await throwsAi(() => parseCloudflareImage(j({ success: true, result: {} }), 'application/json'));
   ok(e2 instanceof AiError && e2.info.code === 'no_image', 'missing image → no_image');
-  let e3 = null; try { await parseCloudflareImage(new Blob(['<html>']), 'text/html'); } catch (e) { e3 = e; }
+  const e3 = await throwsAi(() => parseCloudflareImage(new Blob(['<html>']), 'text/html'));
   ok(e3 instanceof AiError && e3.info.code === 'bad_response', 'non-JSON body → bad_response');
   const names = parseCfModels({ result: [{ name: '@cf/black-forest-labs/flux-2-dev' }, { name: '@cf/meta/llama-3' }, { name: '@cf/runwayml/stable-diffusion-v1-5-inpainting' }, { name: 'bad' }, null] });
   ok(names.join() === '@cf/black-forest-labs/flux-2-dev,@cf/runwayml/stable-diffusion-v1-5-inpainting', 'parseCfModels keeps image-edit models only', names.join());
   ok(parseCfModels(null).length === 0 && parseCfModels({}).length === 0, 'parseCfModels tolerant');
 }
 
-section('providers: registry / sizes / errors / config');
+section('providers: Pollinations (no key)');
 {
-  ok(PROVIDER_IDS.join() === 'openai,openrouter,cloudflare', 'provider ids');
-  for (const id of PROVIDER_IDS) {
-    const P = PROVIDERS[id];
-    ok(P.id === id && typeof P.buildEdit === 'function' && typeof P.edit === 'function' && typeof P.discover === 'function' && typeof P.test === 'function' && typeof P.name() === 'string' && typeof P.howto() === 'string' && typeof P.privacy('h') === 'string' && P.sizes.length === 3, 'provider interface: ' + id);
-  }
-  ok(PROVIDERS.openai.usesMask && !PROVIDERS.openrouter.usesMask && !PROVIDERS.cloudflare.usesMask, 'only OpenAI uses a real mask');
-  ok(!PROVIDERS.openai.free && PROVIDERS.openrouter.free && PROVIDERS.cloudflare.free, 'free flags');
-  ok(PROVIDERS.openai.maxN === 3 && PROVIDERS.openrouter.maxN === 1 && PROVIDERS.cloudflare.maxN === 1 && PROVIDERS.openai.hasQuality && !PROVIDERS.openrouter.hasQuality, 'variants/quality capabilities');
-  ok(PROVIDERS.cloudflare.extra.check('0123456789abcdef0123456789ABCDEF') && !PROVIDERS.cloudflare.extra.check('short') && !PROVIDERS.cloudflare.extra.check(''), 'cloudflare account id check');
-  ok(PROVIDERS.cloudflare.autoModel === CF_MODELS[0] && PROVIDERS.openrouter.autoModel === null, 'auto model: static for cloudflare, discovered for openrouter');
-  ok(PROVIDERS.openrouter.host() === 'openrouter.ai' && PROVIDERS.cloudflare.host() === 'api.cloudflare.com' && PROVIDERS.openai.host({ base: 'https://gw.example.com/v1' }) === 'gw.example.com' && PROVIDERS.openai.host(null) === 'api.openai.com', 'provider hosts');
-  ok(/저장·개선/.test(PROVIDERS.openrouter.privacy('openrouter.ai')) && !/저장·개선/.test(PROVIDERS.openai.privacy('api.openai.com')), 'free providers carry a data-use warning');
-  for (const s of SIZES_FREE) ok(Math.abs(s.ar - s.w / s.h) < 1e-9 && s.str === `${s.w}x${s.h}`, 'SIZES_FREE ' + s.str);
-  for (const s of SIZES_CF) ok(s.out.w === s.w * 2 && s.out.h === s.h * 2 && s.out.w <= 1024 && s.out.h <= 1024 && s.w % 16 === 0 && s.h % 16 === 0 && s.out.w % 16 === 0 && s.out.h % 16 === 0 && Math.max(s.w, s.h) < 512, 'SIZES_CF: inputs < 512, multiples of 16, output = 2×, ≤1024: ' + s.w + 'x' + s.h);
-  ok(pickSize(1.45, SIZES_CF).w === 480 && pickSize(1.45, SIZES_CF).h === 320 && pickSize(0.7, SIZES_CF).h === 480 && pickSize(1, SIZES_FREE).w === 1024, 'pickSize with provider size lists');
-  const pc = planRequest({ x0: 0.4, y0: 0.4, x1: 0.5, y1: 0.5 }, { w: 3000, h: 2000 }, { context: 0.4, sizes: SIZES_CF });
-  ok(pc.size.out && pc.size.w <= 512 && pc.fit.w <= pc.size.w && Math.abs(pc.rect.w / pc.rect.h - pc.size.w / pc.size.h) < 0.03, 'planRequest honours provider sizes (cloudflare 512 input classes)');
+  ok(encodePromptPath('a red boat') === 'a%20red%20boat' && encodePromptPath('  a   red\n boat ') === 'a%20red%20boat', 'spaces → %20, whitespace collapsed');
+  const ko = encodePromptPath('노을 진 바다');
+  ok(ko === encodeURIComponent('노을 진 바다') && decodeURIComponent(ko) === '노을 진 바다', 'Korean is percent-encoded UTF-8');
+  const odd = encodePromptPath("it's (a) test! *ok* ~ x/y?z#w&q=1 a+b %");
+  ok(/^[A-Za-z0-9%._~-]+$/.test(odd) && decodeURIComponent(odd) === "it's (a) test! *ok* ~ x/y?z#w&q=1 a+b %", 'only characters the native allowlist accepts, and it round-trips');
+  ok(encodePromptPath('') === '' && encodePromptPath('   ') === '' && encodePromptPath(null) === '' && encodePromptPath(undefined) === '', 'empty → ""');
+  ok(encodePromptPath('a\ud800b') === 'ab' && encodePromptPath('x\udc00y') === 'xy' && encodePromptPath('🙂') === '%F0%9F%99%82', 'lone surrogates dropped (no URIError), emoji kept');
+  const capped = encodePromptPath('가'.repeat(2000), 1800);
+  ok(capped.length > 0 && capped.length <= 1800 && decodeURIComponent(capped).split('').every((c) => c === '가'), 'long prompt shortened to fit, never cut mid-character');
+  ok(encodePromptPath('x'.repeat(50), 10).length <= 10 || encodePromptPath('x'.repeat(50), 10).length === 1, 'tiny limit still terminates');
 
-  const k = (e) => explainError(e).key;
-  ok(k({ status: 429, code: '429', message: 'Rate limit exceeded: free-models-per-day | upstream' }) === 'freequota', 'openrouter free daily limit');
-  ok(k({ status: 429, code: 'cf_3036', message: 'you have used up your daily free allocation of 10,000 neurons' }) === 'freequota' && k({ status: 429, code: 'cf_3036' }) === 'freequota', 'cloudflare daily free allocation (3036)');
-  ok(k({ status: 403, code: 'cf_5035', message: 'This model requires the Workers Paid plan' }) === 'paidplan' && explainError({ status: 403, code: 'cf_5035' }).settings && k({ status: 429, code: 'cf_3040', message: 'Out of capacity' }) === 'capacity', 'cloudflare paid-plan-only model (5035) and out-of-capacity (3040)');
-  ok(k({ status: 402, code: '402', message: 'Insufficient credits' }) === 'quota' && explainError({ status: 402 }).settings, 'openrouter 402 → credits');
-  ok(k({ status: 404, code: '404', message: 'No endpoints found for x/y' }) === 'model' && k({ status: 400, message: 'x is not a valid model ID' }) === 'model', 'openrouter model errors');
-  ok(k({ status: 403, code: '403', message: 'Your input was flagged by moderation' }) === 'policy', 'moderation before generic 403');
-  ok(k({ code: 'no_free_model' }) === 'nofree' && k({ code: 'no_account' }) === 'account' && k({ code: 'no_image', message: 'I cannot' }) === 'noimage' && k({ code: 'no_key' }) === 'key', 'new local error codes');
-  ok(k({ status: 429, code: 'rate_limit_exceeded', message: 'Rate limit reached for requests per day (RPD)' }) === 'rate', 'a paid OpenAI rate limit is NOT mislabeled as free quota');
-  ok(k({ status: 403, message: 'Your organization must be verified' }) === 'verify' && k({ status: 401 }) === 'key', 'previous mappings intact');
+  ok(pollinationsPath('a red boat', SIZES_PLN[1], 42) === '/prompt/a%20red%20boat?width=896&height=640&seed=42', 'path + query');
+  ok(pollinationsPath('x', null, 'abc') === '/prompt/x?width=768&height=768&seed=0' && pollinationsPath('x', SIZES_PLN[0], -5.7) === '/prompt/x?width=768&height=768&seed=6', 'default size, sanitised seed');
+  ok(pollinationsPath('x', SIZES_PLN[0], 4294967296 * 3 + 7).endsWith('seed=' + ((4294967296 * 3 + 7) % 2147483647)), 'seed stays below 2^31');
+  ok(pollinationsPath('', SIZES_PLN[0], 1).startsWith('/prompt/?'), 'empty prompt → empty path segment (caller refuses)');
+  const pth = pollinationsPath('노을 진 바다, 고요한 아침', SIZES_PLN[2], 123456);
+  ok(/^\/prompt\/[A-Za-z0-9%._~-]{1,2400}\?[A-Za-z0-9=&._,%:-]{0,160}$/.test(pth), 'result matches the native route + query allowlists');
 
-  // 설정 이전 / 멱등성
-  const app = { settings: { ai: { model: 'manual', custom: 'gpt-image-x', resolved: 'gpt-image-1.5', models: ['gpt-image-1.5'], quality: 'high', n: 2, consent: { base: 'https://api.openai.com/v1', ts: 1 } } } };
-  const c1 = aiConfig(app);
-  ok(c1 === aiConfig(app) && c1 === app.settings.ai, 'aiConfig returns the same live object');
-  ok(c1.p.openai.model === 'manual' && c1.p.openai.custom === 'gpt-image-x' && c1.p.openai.resolved === 'gpt-image-1.5' && c1.consents.openai === 'https://api.openai.com/v1' && c1.quality === 'high' && c1.n === 2, 'v1.1.0 settings migrated into p.openai / consents');
-  ok(!('model' in c1) && !('consent' in c1) && c1.provider === 'openai' && c1.feather === 30 && c1.tone === true, 'old keys removed, defaults filled');
-  const pcOr = pcfg(c1, 'openrouter');
-  ok(pcOr.model === 'auto' && Array.isArray(pcOr.models) && Array.isArray(pcOr.free) && pcfg(c1, 'openrouter') === pcOr, 'pcfg creates defaults once');
-  const app2 = { settings: {} };
-  ok(aiConfig(app2).provider === 'openai' && aiConfig(app2).p && aiConfig(app2).consents, 'fresh settings');
-  const app3 = { settings: { ai: { provider: 'nope' } } };
-  ok(aiConfig(app3).provider === 'openai', 'unknown provider falls back');
+  const P = PROVIDERS.pollinations;
+  const r1 = scripted([{ blob: JPG(), ctype: 'image/jpeg' }]);
+  const out = await P.generate({ prompt: 'a red boat', size: SIZES_PLN[1] }, { tag: 7 }, r1);
+  const c = r1.calls[0];
+  ok(out.length === 1 && out[0].type === 'image/jpeg' && c.provider === 'pollinations' && c.req.method === 'GET' && !c.req.body && /^\/prompt\/a%20red%20boat\?width=896&height=640&seed=\d+$/.test(c.req.path) && c.opts.tag === 7, 'generate(): GET /prompt/<prompt>?… → JPEG');
+  const seeds = new Set();
+  for (let i = 0; i < 6; i++) { const rr = scripted([{ blob: JPG(), ctype: 'image/jpeg' }]); await P.generate({ prompt: 'x', size: SIZES_PLN[0] }, {}, rr); seeds.add(/seed=(\d+)/.exec(rr.calls[0].req.path)[1]); }
+  ok(seeds.size > 1, 'a fresh random seed per request');
+
+  const rl = await Promise.all([429, 402].map((status) => throwsAi(() => P.generate({ prompt: 'x', size: SIZES_PLN[0] }, {}, async () => { throw new AiError({ status, code: 'http_' + status, message: 'Too many requests' }); }))));
+  ok(rl.every((e) => e instanceof AiError && e.info.code === 'rate_free' && explainError(e.info).key === 'ratefree') && rl[0].info.status === 429 && rl[1].info.status === 402, '429/402 → rate_free (one image per ~45 s)');
+  const s500 = await throwsAi(() => P.generate({ prompt: 'x', size: SIZES_PLN[0] }, {}, async () => { throw new AiError({ status: 500, code: 'http_500', message: 'boom' }); }));
+  const cn = await throwsAi(() => P.generate({ prompt: 'x', size: SIZES_PLN[0] }, {}, async () => { throw new AiError({ code: 'cancelled' }); }));
+  ok(s500.info.status === 500 && s500.info.code === 'http_500' && cn.info.code === 'cancelled', 'other errors pass through unchanged');
+  const html = await throwsAi(() => P.generate({ prompt: 'x', size: SIZES_PLN[0] }, {}, async () => ({ blob: new Blob(['<html>maintenance</html>'], { type: 'text/html' }), ctype: 'text/html' })));
+  const txt = await throwsAi(() => P.generate({ prompt: 'x', size: SIZES_PLN[0] }, {}, async () => ({ blob: new Blob(['Queue full, wait 45 seconds'], { type: 'text/plain' }), ctype: 'text/plain' })));
+  ok(html.info.code === 'no_image' && html.info.message === '' && txt.info.code === 'no_image' && /Queue full/.test(txt.info.message), 'non-image 200 body → no_image (text kept as the reason)');
+  const never = scripted([imgRes()]);
+  const empty = await throwsAi(() => P.generate({ prompt: '   ', size: SIZES_PLN[0] }, {}, never));
+  ok(empty instanceof AiError && empty.info.code === 'no_image' && never.calls.length === 0, 'empty prompt: refused locally, nothing is sent');
 }
 
-section('providers: generation-only models / translation');
+section('providers: ModelScope (async task + download)');
+{
+  ok(MS_MODEL_RE.test('Qwen/Qwen-Image') && MS_MODEL_RE.test('Tongyi-MAI/Z-Image-Turbo') && MS_MODEL_RE.test('black-forest-labs/FLUX.1-Krea-dev') && MS_MODELS.every((m) => MS_MODEL_RE.test(m)), 'MS_MODEL_RE accepts the presets');
+  ok(!MS_MODEL_RE.test('') && !MS_MODEL_RE.test('Qwen') && !MS_MODEL_RE.test('a/b/c') && !MS_MODEL_RE.test('../x') && !MS_MODEL_RE.test('a/../b') && !MS_MODEL_RE.test('/b') && !MS_MODEL_RE.test('a b/c') && !MS_MODEL_RE.test('a/b?x=1'), 'MS_MODEL_RE rejects malformed names');
+
+  const ptask = parseModelScopeTask;
+  const d = ptask({ task_status: 'SUCCEED', output_images: ['ftp://x/1.png', 5, null, 'https://muse.oss-cn-hangzhou.aliyuncs.com/a.png'] });
+  ok(d.state === 'done' && d.images.join() === 'https://muse.oss-cn-hangzhou.aliyuncs.com/a.png', 'SUCCEED → done, only http(s) string URLs');
+  ok(ptask({ task_status: 'succeed', output_images: [] }).state === 'done' && ptask({ status: 'SUCCEEDED', output_images: ['https://a/b.png'] }).images.length === 1, 'case-insensitive; "status" fallback');
+  ok(ptask({ task_status: 'FAILED', errors: { message: 'prompt blocked', code: 400 } }).message === 'prompt blocked' && ptask({ task_status: 'FAILED', errors: [{ message: 'array form' }] }).message === 'array form' && ptask({ task_status: 'FAILED', message: 'top-level' }).message === 'top-level', 'FAILED keeps the reason (object / array / top-level)');
+  ok(ptask({ task_status: 'FAILED', message: 'y'.repeat(500) }).message.length === 160 && ptask({ task_status: 'CANCELED' }).state === 'failed', 'reason capped; CANCELED = failed');
+  ok(['PENDING', 'RUNNING', 'PROCESSING', '', undefined].every((s) => ptask({ task_status: s }).state === 'pending') && ptask(null).state === 'pending' && ptask({}).state === 'pending' && ptask('x').state === 'pending', 'anything else = still pending');
+
+  // 정상: 작업 만들기 → 두 번 기다림 → 성공 → 내려받기
+  const TASK = 'task-0001-abcdef';
+  const URL1 = 'https://muse-ai.oss-cn-hangzhou.aliyuncs.com/img/a.png?Expires=1&Signature=abc%3D';
+  const phases = [], waits = [];
+  const wait = async (ms) => { waits.push(ms); };
+  const relay = scripted([
+    jsonRes({ task_id: TASK, request_id: 'r1' }),
+    jsonRes({ task_status: 'PENDING' }), jsonRes({ task_status: 'RUNNING' }),
+    jsonRes({ task_status: 'SUCCEED', output_images: [URL1] }),
+    imgRes(),
+  ]);
+  const res = await modelscopeGenerate({ model: 'Qwen/Qwen-Image', prompt: '한글 프롬프트', size: SIZES_FREE[1] }, { onPhase: (p) => phases.push(p) }, relay, wait);
+  const [c0, c1, c2, c3, c4] = relay.calls;
+  ok(res.length === 1 && res[0].type === 'image/png' && relay.calls.length === 5, 'async flow → one PNG (type from the bytes)');
+  ok(c0.provider === 'modelscope' && c0.req.method === 'POST' && c0.req.path === '/images/generations' && c0.req.contentType === 'application/json', 'submit = POST /images/generations (JSON)');
+  const sub = JSON.parse(await c0.req.body.text());
+  ok(sub.model === 'Qwen/Qwen-Image' && sub.prompt === '한글 프롬프트' && sub.size === '1152x768', 'submit body: model / prompt / size');
+  ok([c1, c2, c3].every((c) => c.req.method === 'GET' && c.req.path === '/tasks/' + TASK && !c.req.body), 'status checks = GET /tasks/{id}');
+  ok(c4.req.method === 'GET' && c4.req.url === URL1 && !c4.req.path && c4.provider === 'modelscope', 'download = GET <result url> (no path)');
+  ok(waits.join() === '3000,4000,4000' && phases.join() === 'download', 'poll interval 3 s then 4 s; "download" phase reported once');
+
+  // 동기 응답(images[0].url 이 바로 옴): 기다리지 않는다
+  const w2 = [], rSync = scripted([jsonRes({ images: [{ url: URL1 }] }), imgRes()]);
+  const syncOut = await modelscopeGenerate({ model: 'Qwen/Qwen-Image', prompt: 'x' }, {}, rSync, async (ms) => { w2.push(ms); });
+  const syncBody = JSON.parse(await rSync.calls[0].req.body.text());
+  ok(syncOut.length === 1 && w2.length === 0 && rSync.calls.length === 2 && rSync.calls[1].req.url === URL1 && syncBody.size === '1024x1024', 'direct result URL: no polling; default size 1024x1024');
+  const rLong = scripted([jsonRes({ images: [{ url: URL1 }] }), imgRes()]);
+  await modelscopeGenerate({ model: 'Qwen/Qwen-Image', prompt: 'p'.repeat(5000) }, {}, rLong, wait);
+  ok(JSON.parse(await rLong.calls[0].req.body.text()).prompt.length === 2000, 'prompt capped at 2000 chars');
+
+  // 실패 · 이상 응답
+  const tFail = await throwsAi(() => modelscopeGenerate({ model: 'Qwen/Qwen-Image', prompt: 'x' }, {}, scripted([jsonRes({ task_id: TASK }), jsonRes({ task_status: 'FAILED', errors: { message: 'prompt blocked' } })]), wait));
+  ok(tFail instanceof AiError && tFail.info.code === 'task_failed' && tFail.info.message === 'prompt blocked' && explainError(tFail.info).key === 'taskfail', 'FAILED → task_failed with the reason');
+  for (const [name, first] of [['missing', {}], ['numeric', { task_id: 123456789 }], ['path escape', { task_id: '../evil/../x' }], ['too short', { task_id: 'abc' }], ['slash', { task_id: 'task/0001-abcdef' }]]) {
+    const e = await throwsAi(() => modelscopeGenerate({ model: 'Qwen/Qwen-Image', prompt: 'x' }, {}, scripted([jsonRes(first)]), wait));
+    ok(e instanceof AiError && e.info.code === 'no_task', 'task id ' + name + ' → no_task');
+  }
+  const noImg = await throwsAi(() => modelscopeGenerate({ model: 'Qwen/Qwen-Image', prompt: 'x' }, {}, scripted([jsonRes({ task_id: TASK }), jsonRes({ task_status: 'SUCCEED', output_images: [] })]), wait));
+  ok(noImg instanceof AiError && noImg.info.code === 'no_image', 'SUCCEED without images → no_image');
+  const notJson = await throwsAi(() => modelscopeGenerate({ model: 'Qwen/Qwen-Image', prompt: 'x' }, {}, scripted([{ blob: new Blob(['<html>'], { type: 'text/html' }), ctype: 'text/html' }]), wait));
+  const notJson2 = await throwsAi(() => modelscopeGenerate({ model: 'Qwen/Qwen-Image', prompt: 'x' }, {}, scripted([jsonRes({ task_id: TASK }), { blob: new Blob(['oops']), ctype: 'text/plain' }]), wait));
+  ok(notJson.info.code === 'bad_response' && notJson2.info.code === 'bad_response', 'non-JSON submit / status → bad_response');
+  const dl = await throwsAi(() => modelscopeGenerate({ model: 'Qwen/Qwen-Image', prompt: 'x' }, {}, scripted([jsonRes({ images: [{ url: URL1 }] }), { blob: new Blob(['<html>expired</html>'], { type: 'text/html' }), ctype: 'text/html' }]), wait));
+  ok(dl instanceof AiError && dl.info.code === 'no_image', 'downloaded body that is not an image → no_image');
+  const never = scripted([jsonRes({ task_id: TASK })]);
+  const badModel = await throwsAi(() => modelscopeGenerate({ model: '../evil', prompt: 'x' }, {}, never, wait));
+  ok(badModel instanceof AiError && badModel.info.status === 404 && badModel.info.code === 'model_not_found' && never.calls.length === 0, 'invalid model name: rejected before any request');
+  const native401 = await throwsAi(() => modelscopeGenerate({ model: 'Qwen/Qwen-Image', prompt: 'x' }, {}, async () => { throw new AiError({ status: 401, code: 'http_401', message: 'Invalid token' }); }, wait));
+  ok(native401 instanceof AiError && native401.info.status === 401 && explainError(native401.info).key === 'key', 'native errors (401) pass through');
+
+  // 시간 초과 · 취소
+  const tmo = await throwsAi(() => modelscopeGenerate({ model: 'Qwen/Qwen-Image', prompt: 'x' }, { pollTimeoutMs: 60 }, scripted([jsonRes({ task_id: TASK }), jsonRes({ task_status: 'RUNNING' })]), () => new Promise((r) => setTimeout(r, 25))));
+  ok(tmo instanceof AiError && tmo.info.code === 'timeout', 'still running after pollTimeoutMs → timeout');
+  const cx = await throwsAi(() => modelscopeGenerate({ model: 'Qwen/Qwen-Image', prompt: 'x' }, {}, scripted([jsonRes({ task_id: TASK })]), async () => { throw new AiError({ code: 'cancelled' }); }));
+  ok(cx instanceof AiError && cx.info.code === 'cancelled', 'cancel while waiting');
+  const ac = new AbortController(); ac.abort();
+  const pre = await throwsAi(() => sleepAbortable(10000, ac.signal));
+  const ac2 = new AbortController(); const mid = throwsAi(() => sleepAbortable(10000, ac2.signal)); setTimeout(() => ac2.abort(), 15);
+  const t0 = Date.now(); const midErr = await mid;
+  ok(pre instanceof AiError && pre.info.code === 'cancelled' && midErr instanceof AiError && midErr.info.code === 'cancelled' && Date.now() - t0 < 2000, 'sleepAbortable: pre-aborted / aborted mid-wait');
+  const tt = Date.now(); await sleepAbortable(20, new AbortController().signal); await sleepAbortable(5);
+  ok(Date.now() - tt >= 15, 'sleepAbortable: resolves after the delay (signal optional)');
+
+  const PM = PROVIDERS.modelscope;
+  const rP = scripted([jsonRes({ images: [{ url: URL1 }] }), imgRes()]);
+  const viaProvider = await PM.generate({ model: MS_MODELS[1], prompt: 'x', size: SIZES_FREE[0] }, {}, rP);
+  ok(viaProvider.length === 1 && JSON.parse(await rP.calls[0].req.body.text()).model === MS_MODELS[1], 'provider.generate() delegates to the task flow');
+}
+
+section('providers: registry / sizes / config');
+{
+  ok(PROVIDER_IDS.join() === 'cloudflare,pollinations,modelscope', 'provider ids: Cloudflare, Pollinations, ModelScope');
+  ok(!('openai' in PROVIDERS) && !('openrouter' in PROVIDERS), 'OpenAI / OpenRouter are gone');
+  for (const id of PROVIDER_IDS) {
+    const P = PROVIDERS[id];
+    ok(P.id === id && P.free === true && typeof P.name() === 'string' && typeof P.tag() === 'string' && typeof P.desc() === 'string' && typeof P.howto() === 'string' && typeof P.host() === 'string' && typeof P.privacy('h') === 'string' && typeof P.privacyText('h') === 'string' && P.sizes.length === 3 && typeof P.generate === 'function' && Array.isArray(P.modelPresets), 'provider interface: ' + id);
+    const all = [P.name(), P.tag(), P.desc(), P.howto(), P.privacy('h'), P.privacyText('h')].join(' ');
+    ok(!/openai|openrouter|gpt-image/i.test(all), 'no stale OpenAI/OpenRouter wording: ' + id);
+  }
+  const { cloudflare: CF, pollinations: PL, modelscope: MS } = PROVIDERS;
+  ok(!CF.noKey && PL.noKey && !MS.noKey, 'only Pollinations works without a key');
+  ok(!CF.genOnly && PL.genOnly && MS.genOnly, 'only Cloudflare can edit with the photo');
+  ok(typeof CF.buildEdit === 'function' && typeof CF.edit === 'function' && PL.buildEdit === undefined && MS.buildEdit === undefined && PL.edit === undefined && MS.edit === undefined, 'edit builders: Cloudflare only');
+  ok(CF.extra && CF.extra.id === 'account' && PL.extra === null && MS.extra === null, 'only Cloudflare needs an account ID');
+  ok(!CF.usesMask && !PL.usesMask && !MS.usesMask && CF.maxN === 1 && !CF.hasQuality, 'no mask / variants / quality options any more');
+  ok(CF.autoModel === CF_MODELS[0] && MS.autoModel === MS_MODELS[0] && PL.autoModel === 'pollinations' && MS.modelPresets === MS_MODELS && PL.modelPresets.length === 0, 'auto models + presets');
+  ok(CF.host() === 'api.cloudflare.com' && PL.host() === 'image.pollinations.ai' && MS.host() === 'api-inference.modelscope.cn', 'provider hosts');
+  ok(/저장·개선/.test(PL.privacy('h')) && /저장·개선/.test(MS.privacy('h')) && !/저장·개선/.test(CF.privacy('h')), 'free/trial providers carry a data-use warning');
+  ok(PROVIDER_IDS.every((id) => /사진은 보내지 않아요/.test(PROVIDERS[id].privacyText('h'))) && /45초/.test(PL.privacyText('h')) && /url|주소/i.test(PL.privacyText('h')) && /알리바바/.test(MS.privacyText('h')), 'text-only privacy notes (no photo; URL logging; Alibaba download)');
+  ok(getProvider('nope') === CF && getProvider(undefined) === CF && getProvider('modelscope') === MS, 'getProvider falls back to Cloudflare');
+
+  for (const s of SIZES_FREE) ok(Math.abs(s.ar - s.w / s.h) < 1e-9 && s.str === `${s.w}x${s.h}`, 'SIZES_FREE ' + s.str);
+  for (const s of SIZES_PLN) ok(s.w * s.h <= 768 * 768 && s.w % 16 === 0 && s.h % 16 === 0 && s.str === `${s.w}x${s.h}` && Math.abs(s.ar - s.w / s.h) < 1e-9, 'SIZES_PLN within 768×768 area: ' + s.str);
+  for (const s of SIZES_CF) ok(s.out.w === s.w * 2 && s.out.h === s.h * 2 && s.out.w <= 1024 && s.out.h <= 1024 && s.w % 16 === 0 && s.h % 16 === 0 && s.out.w % 16 === 0 && s.out.h % 16 === 0 && Math.max(s.w, s.h) < 512, 'SIZES_CF: inputs < 512, multiples of 16, output = 2×, ≤1024: ' + s.w + 'x' + s.h);
+  ok(pickSize(1.45, SIZES_CF).w === 480 && pickSize(1.45, SIZES_CF).h === 320 && pickSize(0.7, SIZES_CF).h === 480 && pickSize(1, SIZES_FREE).w === 1024, 'pickSize with provider size lists');
+  ok(pickSize(1.45, SIZES_PLN).str === '896x640' && pickSize(0.7, SIZES_PLN).str === '640x896' && pickSize(1, SIZES_PLN).str === '768x768', 'pickSize with the Pollinations classes');
+  const pc = planRequest({ x0: 0.4, y0: 0.4, x1: 0.5, y1: 0.5 }, { w: 3000, h: 2000 }, { context: 0.4, sizes: SIZES_CF });
+  ok(pc.size.out && pc.size.w <= 512 && pc.fit.w <= pc.size.w && Math.abs(pc.rect.w / pc.rect.h - pc.size.w / pc.size.h) < 0.03, 'planRequest honours provider sizes (cloudflare 512 input classes)');
+  const pp = planRequest({ x0: 0.4, y0: 0.4, x1: 0.5, y1: 0.5 }, { w: 3000, h: 2000 }, { context: 0.4, sizes: SIZES_PLN });
+  ok(pp.size.w * pp.size.h <= 768 * 768 && pp.fit.w <= pp.size.w && Math.abs(pp.rect.w / pp.rect.h - pp.size.w / pp.size.h) < 0.03, 'planRequest honours the Pollinations classes');
+
+  // 설정 이전 / 멱등성: 삭제된 제공자의 설정·동의는 지우고 Cloudflare 설정은 지킨다
+  const app = { settings: { ai: {
+    provider: 'openai', genProvider: 'openrouter', quality: 'high', n: 2, model: 'manual', custom: 'gpt-image-x', resolved: 'gpt-image-1.5', models: ['gpt-image-1.5'], consent: { base: 'https://api.openai.com/v1', ts: 1 },
+    p: { openai: { model: 'manual' }, openrouter: { model: 'auto', free: [] }, cloudflare: { model: 'auto', custom: '@cf/x/y', models: ['@cf/x/y'] } },
+    consents: { openai: 'https://api.openai.com/v1', 'openai:text': 'api.openai.com', openrouter: 'openrouter.ai', 'openrouter:text': 'openrouter.ai', cloudflare: 'api.cloudflare.com' },
+  } } };
+  const c1 = aiConfig(app);
+  ok(c1 === aiConfig(app) && c1 === app.settings.ai, 'aiConfig returns the same live object');
+  ok(c1.provider === 'cloudflare' && !('openai' in c1.p) && !('openrouter' in c1.p) && c1.p.cloudflare.custom === '@cf/x/y' && c1.p.cloudflare.models[0] === '@cf/x/y', 'removed providers\' settings dropped, Cloudflare settings kept');
+  ok(c1.consents.cloudflare === 'api.cloudflare.com' && Object.keys(c1.consents).join() === 'cloudflare', 'removed providers\' consents dropped');
+  ok(['quality', 'n', 'model', 'custom', 'resolved', 'models', 'consent', 'genProvider'].every((x) => !(x in c1)) && c1.feather === 30 && c1.tone === true && c1.translate === true && c1.ctx === 1, 'old keys removed, defaults filled');
+  const keep = aiConfig({ settings: { ai: { provider: 'pollinations', genProvider: 'modelscope', feather: 10, tone: false } } });
+  ok(keep.provider === 'pollinations' && keep.genProvider === 'modelscope' && keep.feather === 10 && keep.tone === false, 'valid choices survive');
+  ok(aiConfig({ settings: {} }).provider === 'cloudflare' && aiConfig({ settings: { ai: { provider: 'nope' } } }).provider === 'cloudflare' && aiConfig({ settings: { ai: 5 } }).provider === 'cloudflare', 'fresh / unknown / corrupt settings → Cloudflare');
+  const pcm = pcfg(c1, 'modelscope');
+  ok(pcm.model === MODEL_AUTO && MODEL_AUTO === 'auto' && pcm.custom === '' && Array.isArray(pcm.models) && pcfg(c1, 'modelscope') === pcm, 'pcfg creates defaults once');
+}
+
+section('providers: model profiles / translation');
 {
   const SCH = '@cf/black-forest-labs/flux-1-schnell';
   ok(isCfGenerateModel(SCH) && isCfGenerateModel('@cf/stabilityai/stable-diffusion-xl-base-1.0') && isCfGenerateModel('@cf/lykon/dreamshaper-8-lcm') && !isCfGenerateModel(CF_MODELS[0]) && !isCfGenerateModel('') && !isCfGenerateModel(null), 'isCfGenerateModel: text-to-image models only');
   ok(CF_GENERATE_MODELS[0] === SCH && PROVIDERS.cloudflare.generateModel === SCH && PROVIDERS.cloudflare.modelPresets.includes(SCH) && CF_MODELS.every((m) => !isCfGenerateModel(m)), 'schnell is the Cloudflare generation model and is selectable');
   const g = modelProfile('cloudflare', SCH);
-  ok(g.mode === 'generate' && g.noPhoto === true && g.usesMask === false && g.sizes === SIZES_FREE, 'profile: Cloudflare schnell = generate, no photo, no mask');
-  const e1 = modelProfile('cloudflare', CF_MODELS[0]), e2 = modelProfile('openai', 'gpt-image-1'), e3 = modelProfile('openrouter', 'a/b:free'), e4 = modelProfile('nope', 'x');
-  ok(e1.mode === 'edit' && !e1.noPhoto && e1.sizes === SIZES_CF && !e1.usesMask, 'profile: FLUX.2 = edit with marked image (CF sizes)');
-  ok(e2.mode === 'edit' && e2.usesMask && e2.sizes === SIZES && e3.mode === 'edit' && !e3.usesMask && e3.sizes === SIZES_FREE && e4.mode === 'edit' && e4.usesMask, 'profile: OpenAI mask edit, OpenRouter marked edit, unknown provider → OpenAI');
-  ok(typeof PROVIDERS.openai.generate === 'function' && typeof PROVIDERS.cloudflare.generate === 'function' && PROVIDERS.openrouter.generate === undefined, 'generation capability per provider');
-  ok(/api\.cloudflare\.com/.test(PROVIDERS.cloudflare.privacyText('api.cloudflare.com')) && /사진은 보내지 않아요/.test(PROVIDERS.cloudflare.privacyText('x')) && /청구/.test(PROVIDERS.openai.privacyText('api.openai.com')), 'text-only privacy notes');
+  ok(g.mode === 'generate' && g.noPhoto === true && g.usesMask === false && g.sizes === SIZES_FREE, 'profile: Cloudflare schnell = generate, no photo');
+  const e1 = modelProfile('cloudflare', CF_MODELS[0]);
+  ok(e1.mode === 'edit' && !e1.noPhoto && e1.sizes === SIZES_CF && !e1.usesMask, 'profile: FLUX.2 = edit with the marked image (CF sizes)');
+  const p1 = modelProfile('pollinations', 'pollinations'), m1 = modelProfile('modelscope', 'Qwen/Qwen-Image'), u1 = modelProfile('nope', 'x');
+  ok(p1.mode === 'generate' && p1.noPhoto && p1.sizes === SIZES_PLN && m1.mode === 'generate' && m1.noPhoto && m1.sizes === SIZES_FREE, 'profile: Pollinations / ModelScope are generation-only (no photo)');
+  ok(u1.mode === 'edit' && u1.sizes === SIZES_CF, 'profile: unknown provider → Cloudflare');
+  ok(/api\.cloudflare\.com/.test(PROVIDERS.cloudflare.privacyText('api.cloudflare.com')) && /사진은 보내지 않아요/.test(PROVIDERS.cloudflare.privacyText('x')), 'text-only privacy note');
 
   ok(hasHangul('노을') && hasHangul('a 가 b') && hasHangul('ㅋㅋ') && !hasHangul('sunset') && !hasHangul('') && !hasHangul(null), 'hasHangul');
   const asJson = (o) => ({ blob: new Blob([JSON.stringify(o)], { type: 'application/json' }), ctype: 'application/json' });
@@ -437,7 +536,7 @@ section('providers: generation-only models / translation');
   ok((await translateToEnglish('   ', {}, okRelay)).text === '', 'translate: blank input');
   const bad = [async () => asJson({ result: { translated_text: '여전히 한국어' } }), async () => asJson({ result: {} }), async () => ({ blob: new Blob(['<html>']), ctype: 'text/html' }), async () => { throw new AiError({ status: 400, code: 'bad_request' }); }, async () => asJson({ result: { translated_text: '   ' } })];
   for (const [i, relay] of bad.entries()) { const r = await translateToEnglish('고양이', {}, relay); ok(r.text === '고양이' && r.translated === false, 'translate falls back to the original on failure #' + i); }
-  let rethrown = null; try { await translateToEnglish('고양이', {}, async () => { throw new AiError({ code: 'cancelled' }); }); } catch (e) { rethrown = e; }
+  const rethrown = await throwsAi(() => translateToEnglish('고양이', {}, async () => { throw new AiError({ code: 'cancelled' }); }));
   ok(rethrown instanceof AiError && rethrown.info.code === 'cancelled', 'translate: cancellation is not swallowed');
   const long = await translateToEnglish('가'.repeat(900), {}, async (p, req) => { calls.push([p, req]); return asJson({ result: { translated_text: 'x'.repeat(2000) } }); });
   const lastBody = JSON.parse(await calls.at(-1)[1].body.text());

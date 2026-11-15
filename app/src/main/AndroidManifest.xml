@@ -7,8 +7,8 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
-    <!-- 인터넷은 "AI 수정" 요청(AiClient: 사용자가 저장한 https 서버, 기본 api.openai.com)에만 쓴다.
-         WebView 의 웹 콘텐츠는 CSP + 외부 요청 403 으로 인터넷에 직접 접근할 수 없다. -->
+    <!-- 인터넷은 AI 기능 요청(AiClient: 고정된 https 서버 api.cloudflare.com · image.pollinations.ai · api-inference.modelscope.cn,
+         결과 이미지는 허용된 도메인에서만)에만 쓴다. WebView 의 웹 콘텐츠는 CSP + 외부 요청 403 으로 인터넷에 직접 접근할 수 없다. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />

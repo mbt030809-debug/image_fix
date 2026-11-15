@@ -1,4 +1,5 @@
-// AI 수정: 올가미/브러시/사각형/원형으로 영역을 고르고, 그 영역(+주변)만 AI 에 편집을 요청한다.
+// AI 영역 수정: 올가미/브러시/사각형/원형으로 영역을 고르고, 그 영역(+주변)만 AI 에 요청한다.
+//  - Cloudflare: 사진을 보고 고친다(편집) 또는 문구만으로 채운다  - Pollinations · ModelScope: 문구로 채우기(사진 미전송)
 // 결과는 "선택 안쪽만 보이는" 이미지 레이어로 합성돼 비파괴(숨기기·삭제·실행 취소)로 남는다.
 import { h, icon, rafThrottle } from '../ui/dom.js';
 import { t } from '../i18n.js';
@@ -7,7 +8,7 @@ import { Segmented, Chips, Slider, Btn, IconBtn, toast } from '../ui/components.
 import { bridge } from '../bridge.js';
 import * as Drafts from '../drafts.js';
 import { newMask, rasterPolygon, rectPts, ellipsePts, combine, strokeOp, invertMask, bboxOf, growMask, contourSegments } from '../ai/selection.js';
-import { explainError, MODEL_AUTO } from '../ai/openai.js';
+import { explainError, MODEL_AUTO } from '../ai/common.js';
 import { AiError } from '../ai/client.js';
 import { PROVIDERS, getProvider, modelProfile, translateToEnglish } from '../ai/providers.js';
 import { prepareRequest, makePatch, sentPreview } from '../ai/job.js';
@@ -53,7 +54,7 @@ export function open(ed, body) {
 
   const prov = () => getProvider(cfg.provider);
   /** 지금 선택된 모델(자동이면 정해진 값 또는 마지막으로 확인한 값) — 요청 전에 동작 방식(편집/생성)을 알기 위해 */
-  const currentModel = (P) => { const pc = pcfg(cfg, P.id); return pc.model !== MODEL_AUTO ? ((pc.custom || '').trim() || pc.model) : (P.autoModel || pc.resolved || ''); };
+  const currentModel = (P) => { const pc = pcfg(cfg, P.id); return pc.model !== MODEL_AUTO ? ((pc.custom || '').trim() || pc.model) : (P.autoModel || ''); };
   const note = (s) => h('p', { class: 'sheet-note' }, s);
   const sec = (s) => h('div', { class: 'sheet-sec' }, s);
   const save = () => ed.app.saveSettings();
@@ -235,39 +236,31 @@ export function open(ed, body) {
     const M = modelProfile(P.id, currentModel(P));
     const list = M.mode === 'generate' ? GEN_PRESETS : PRESETS;
     const presets = Chips({ label: t('예시 문구', 'Examples'), items: list.map((p) => ({ id: p.id, label: t(p.ko, p.en) })), onSelect: (id) => { const p = list.find((x) => x.id === id); S.prompt = t(p.pko, p.pen); promptEl.value = S.prompt; promptEl.focus(); } });
-    const quality = Segmented({ label: t('품질', 'Quality'), items: [{ id: 'low', label: t('빠름', 'Fast') }, { id: 'medium', label: t('보통', 'Normal') }, { id: 'high', label: t('고품질', 'High') }], value: cfg.quality, onChange: (v) => { cfg.quality = v; save(); } });
-    const count = Segmented({ label: t('생성 개수', 'Variants'), items: [1, 2, 3].filter((n) => n <= P.maxN).map((n) => ({ id: String(n), label: String(n) })), value: String(Math.min(cfg.n, P.maxN)), onChange: (v) => { cfg.n = +v; save(); } });
     const ctx = Segmented({ label: t('주변 포함', 'Context'), items: [{ id: '0', label: t('좁게', 'Tight') }, { id: '1', label: t('보통', 'Normal') }, { id: '2', label: t('넓게', 'Wide') }], value: String(cfg.ctx), onChange: (v) => { cfg.ctx = +v; save(); } });
     const openSet = (pid) => openAiSettings(ed.app, { provider: pid, onClose: renderBody });
-    if (S.msg) body.append(h('p', { class: 'ai-msg err', role: 'alert' }, S.msg.text), S.msg.settings ? Btn(t('AI 설정 열기', 'Open AI settings'), 'tonal', () => openSet(P.id), 'key-round') : null);
-    if (bridge.ai.available()) {
-      const any = Object.keys(PROVIDERS).some((id) => providerReady(id));
-      if (!any) {
-        // 아직 키가 하나도 없을 때: 무료로 시작할 수 있는 방법을 먼저 보여 준다
-        body.append(h('div', { class: 'ai-setup' }, note(t('AI 수정을 쓰려면 제공자를 하나 골라 키를 넣어야 해요. 결제 없이 시작하려면 무료 옵션을 써 보세요.', 'Pick a provider and add a key to use AI edit. To start without paying, try a free option.')),
-          h('div', { class: 'row wrap' }, Btn(t('Cloudflare · 하루 무료', 'Cloudflare · daily free'), 'tonal', () => openSet('cloudflare'), 'key-round'), Btn(t('OpenRouter · 무료 모델', 'OpenRouter · free models'), 'tonal', () => openSet('openrouter'), 'key-round'), Btn(t('OpenAI · 유료', 'OpenAI · paid'), 'outlined', () => openSet('openai'), 'key-round'))));
-      } else if (!providerReady(P.id)) {
-        body.append(h('div', { class: 'ai-setup' }, note(t(`${P.short} 키를 설정하면 바로 쓸 수 있어요.`, `Set up your ${P.short} key to use it.`)), Btn(t('키 설정', 'Set up key'), 'tonal', () => openSet(P.id), 'key-round')));
-      }
+    if (S.msg) body.append(...[h('p', { class: 'ai-msg err', role: 'alert' }, S.msg.text), S.msg.settings ? Btn(t('AI 설정 열기', 'Open AI settings'), 'tonal', () => openSet(P.id), 'key-round') : null].filter(Boolean)); // (null 을 그대로 append 하면 글자 "null" 이 붙는다)
+    if (bridge.ai.available() && !providerReady(P.id)) {
+      body.append(h('div', { class: 'ai-setup' }, note(t(`${P.short} 키를 설정하면 바로 쓸 수 있어요.`, `Set up your ${P.short} key to use it.`)),
+        h('div', { class: 'row wrap' }, Btn(t('키 설정', 'Set up key'), 'tonal', () => openSet(P.id), 'key-round'),
+          Btn(t('키 없이 쓰기: Pollinations', 'No key: Pollinations'), 'outlined', () => { cfg.provider = 'pollinations'; save(); renderBody(); }, 'wand-sparkles'))));
     }
     body.append(h('div', { class: 'row wrap', style: { justifyContent: 'space-between' } }, h('span', { class: 'sheet-note' }, t('제공자: ', 'Provider: ') + P.short + ' · ' + P.tag()), Btn(t('바꾸기', 'Change'), 'text', () => openSet(P.id))));
+    if (P.id === 'pollinations') body.append(note(t('Pollinations 는 한 번에 한 장, 약 45초 간격으로만 만들 수 있어요. 결과에 작은 로고가 붙을 수 있어요.', 'Pollinations makes one image at a time, about 45 seconds apart. Results may carry a small logo.')));
+    if (P.genOnly) body.append(note(t('이 제공자는 사진을 보지 못하고 문구만으로 그려요. 선택 안쪽에 들어갈 내용을 설명해 주세요(예: 맑은 하늘, 잔디밭). 영어 문구가 가장 잘 그려져요. 사진은 전송되지 않아요.', 'This provider never sees your photo: it paints from the prompt alone. Describe what should appear inside the selection (e.g. clear sky, grass). English prompts work best. No photo is sent.')));
     if (P.id === 'cloudflare') {
       body.append(Segmented({ label: t('방식', 'Mode'), items: [{ id: 'edit', label: t('사진 보고 편집', 'Edit with photo') }, { id: 'generate', label: t('문구로 채우기', 'Fill from prompt') }], value: M.mode,
         onChange: (v) => { const pc = pcfg(cfg, 'cloudflare'); if (v === 'generate') { pc.model = P.generateModel; pc.custom = P.generateModel; } else { pc.model = MODEL_AUTO; } save(); renderBody(); } }).el);
       if (M.mode === 'generate') body.append(note(t('이 방식은 사진을 보지 않고 문구만으로 그려요. 선택 안쪽에 들어갈 내용을 설명해 주세요(예: 맑은 하늘, 잔디밭). 한국어는 영어로 번역해서 보내요. 사진은 전송되지 않아요.', 'This mode never sees your photo: it paints from the prompt alone. Describe what should appear inside the selection (e.g. clear sky, grass). Korean is translated to English first. No photo is sent.')));
     }
     body.append(promptEl, presets.el);
-    if (P.hasQuality) body.append(sec(t('품질', 'Quality')), quality.el);
-    if (P.maxN > 1) body.append(sec(t('생성 개수 (개수만큼 요금이 늘어요)', 'Variants (cost grows with the count)')), count.el);
     body.append(sec(t('주변 포함 (넓을수록 어울리게 만들지만 결과가 덜 선명할 수 있어요)', 'Context (wider blends better but may look softer)')), ctx.el,
-      note(M.mode === 'generate' ? t('결과는 선택 안쪽에만 합쳐져요. 사진과 무관하게 그려서 밝기·색이 어긋날 수 있어요. 마음에 안 들면 “다시 생성”을 눌러 보세요.', 'The result is blended only inside your selection. It is painted without seeing the photo, so lighting may not match; try "Regenerate".') : P.usesMask
-        ? t('선택 영역과 주변만 전송하고, 결과는 선택 안쪽에만 합쳐져요. 취소해도 이미 시작된 요청은 요금이 청구될 수 있어요.', 'Only the selected area and its surroundings are sent, and the result is blended only inside your selection. Cancelling may not avoid charges for a request already started.')
+      note(M.mode === 'generate' ? t('결과는 선택 안쪽에만 합쳐져요. 사진과 무관하게 그려서 밝기·색이 어긋날 수 있어요. 마음에 안 들면 “다시 생성”을 눌러 보세요.', 'The result is blended only inside your selection. It is painted without seeing the photo, so lighting may not match; try "Regenerate".')
         : t('선택 영역과 주변(편집할 곳을 마젠타로 표시한 사본 포함)만 전송하고, 결과는 선택 안쪽에만 합쳐져요. 무료 모델은 결과가 들쭉날쭉할 수 있어요. 마음에 안 들면 “다시 생성”을 눌러 보세요.', 'Only the selected area and its surroundings (plus a copy with the edit area marked in magenta) are sent, and the result is blended only inside your selection. Free models can be hit-or-miss; try "Regenerate".')),
       Btn(t('AI 설정', 'AI settings'), 'text', () => openSet(P.id), 'key-round'));
   }
 
   // ------------------------------------------------------------ 진행 중 / 결과
-  const PHASE = () => ({ translate: t('영어로 번역 중…', 'Translating to English…'), prepare: t('이미지 준비 중…', 'Preparing image…'), upload: t('서버로 보내는 중…', 'Uploading…'), wait: t('AI가 작업 중…', 'AI is working…'), finish: t('결과를 합치는 중…', 'Blending the result…') });
+  const PHASE = () => ({ translate: t('영어로 번역 중…', 'Translating to English…'), prepare: t('이미지 준비 중…', 'Preparing image…'), upload: t('서버로 보내는 중…', 'Uploading…'), wait: t('AI가 작업 중…', 'AI is working…'), download: t('결과 이미지를 받는 중…', 'Downloading the result…'), finish: t('결과를 합치는 중…', 'Blending the result…') });
   let phaseEl = null;
   function updatePhase() {
     if (!phaseEl || !job) return;
@@ -385,10 +378,10 @@ export function open(ed, body) {
       let blobs;
       if (gen) {
         let text = S.prompt;
-        if (cfg.translate !== false) { job.phase = 'translate'; text = (await translateToEnglish(S.prompt, { signal: ctl.signal })).text; }
-        blobs = await P.generate({ model, prompt: text }, { signal: ctl.signal, onPhase });
+        if (P.id === 'cloudflare' && cfg.translate !== false) { job.phase = 'translate'; text = (await translateToEnglish(S.prompt, { signal: ctl.signal })).text; } // 번역은 Cloudflare 만(문구를 다른 곳으로 더 보내지 않는다)
+        blobs = await P.generate({ model, prompt: text, size: prep.size }, { signal: ctl.signal, onPhase });
       } else {
-        const req = await P.buildEdit({ model, prompt: S.prompt, size: prep.size, quality: cfg.quality, n: Math.min(cfg.n, P.maxN), outputs: (pcfg(cfg, P.id).meta || {})[model] }, { image: prep.imageBlob, mask: prep.maskBlob, marked: prep.markedBlob });
+        const req = await P.buildEdit({ model, prompt: S.prompt, size: prep.size }, { image: prep.imageBlob, marked: prep.markedBlob });
         blobs = await P.edit(req, { signal: ctl.signal, onPhase });
       }
       if (job) job.phase = 'finish';
@@ -407,7 +400,7 @@ export function open(ed, body) {
       const info = e instanceof AiError ? e.info : { code: 'other', message: String((e && e.message) || e) };
       if (!(e instanceof AiError)) console.error(e);
       if (info.code === 'cancelled') S.msg = null;
-      else { S.msg = explainError(info); if (S.msg.key === 'model') { pcfg(cfg, P.id).resolved = ''; save(); } }
+      else S.msg = explainError(info);
       renderAll();
       if (S.msg) toast(S.msg.text);
     } finally {

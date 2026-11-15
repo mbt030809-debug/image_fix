@@ -11,15 +11,15 @@ export class AiError extends Error {
 }
 
 /**
- * provider: 'openai' | 'openrouter' | 'cloudflare'
- * req: {method, path, contentType?, body?: Blob}
+ * provider: 'cloudflare' | 'pollinations' | 'modelscope'
+ * req: {method, path, contentType?, body?: Blob}  또는 결과 이미지 내려받기 {method:'GET', url} (허용된 도메인만 — 네이티브가 검사)
  * opts: {signal?: AbortSignal, onPhase?: (phase)=>void, timeoutMs?: number}
  * 반환 {id, status} (state==='done'). 결과를 다 쓴 뒤 bridge.ai.release(id) 는 호출자 책임.
  */
 export async function runRelay(provider, req, opts = {}) {
   const { onPhase, signal, timeoutMs = 360000 } = opts;
   const body = req.body || null;
-  const spec = { provider, method: req.method, path: req.path };
+  const spec = req.url ? { provider, method: req.method, url: req.url } : { provider, method: req.method, path: req.path };
   if (body) { spec.type = req.contentType; spec.len = body.size; }
   if (signal && signal.aborted) throw new AiError({ code: 'cancelled' });
   const id = bridge.ai.begin(spec);
@@ -62,21 +62,7 @@ export async function fetchResult(id, i) {
   return res.blob();
 }
 
-/** OpenAI: 이미지 편집 요청 → 결과 이미지 Blob 배열 (네이티브가 data[].b64_json 을 풀어 준다) */
-export async function editImages(provider, req, opts) {
-  const { id, status } = await runRelay(provider, req, opts);
-  try {
-    const n = Math.max(0, Math.min(10, status.n | 0));
-    if (!n) throw new AiError({ code: 'bad_response', message: 'no images' });
-    const out = [];
-    for (let i = 0; i < n; i++) out.push(await fetchResult(id, i));
-    return out;
-  } finally {
-    bridge.ai.release(id);
-  }
-}
-
-/** raw 응답 제공자(OpenRouter/Cloudflare): 응답 본문 Blob + Content-Type 을 그대로 받는다 */
+/** 응답 본문 Blob + Content-Type 을 그대로 받는다(네이티브는 모든 응답을 raw 로 돌려준다) */
 export async function relayRaw(provider, req, opts) {
   const { id, status } = await runRelay(provider, req, opts);
   try {
@@ -85,11 +71,4 @@ export async function relayRaw(provider, req, opts) {
   } finally {
     bridge.ai.release(id);
   }
-}
-
-/** OpenAI 키 확인 + 사용 가능한 모델 id 목록 (네이티브가 id 만 뽑아 준다) */
-export async function listModelIds(opts) {
-  const { id, status } = await runRelay('openai', { method: 'GET', path: '/models' }, opts);
-  bridge.ai.release(id);
-  return Array.isArray(status.ids) ? status.ids.map(String) : [];
 }
