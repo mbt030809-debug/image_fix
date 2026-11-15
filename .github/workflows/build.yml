@@ -1,0 +1,47 @@
+name: build-apk
+
+# 푸시할 때마다 단위 테스트 + 네이티브(JVM) 테스트를 돌리고 APK 를 빌드해 Artifact 로 올린다. 수동 실행(Run workflow)도 된다.
+# Artifact: ImageFix-APK (APK + release/latest.json). 앱 안 업데이트용 배포는 저장소의 release/ 폴더를 직접 푸시하는 기존 방식 그대로다.
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      IMAGEFIX_TOOLS: ${{ github.workspace }}/.tools
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Android 툴체인(aapt · apksigner · zipalign · android.jar · d8)
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends aapt apksigner zipalign
+          bash scripts/setup_toolchain.sh
+      - name: 웹 의존성
+        run: cd web && npm install --no-audit --no-fund
+      - name: 단위 테스트(엔진 · AI · 도구)
+        run: |
+          node web/tests/unit.mjs
+          node web/tests/ai.unit.mjs
+          node web/tests/tools.unit.mjs
+      - name: 네이티브 JVM 테스트(AiClient · KeyVault · Updater)
+        run: bash tests/jvm/run.sh
+      - name: APK 빌드(서명)
+        run: BUILD_DATE=$(date -u +%Y-%m-%d) bash scripts/build_apk.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ImageFix-APK
+          path: |
+            release/ImageFix_*.apk
+            release/latest.json
+          if-no-files-found: error
