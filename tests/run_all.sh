@@ -22,7 +22,7 @@ run node groups.cjs
 run node sheet_resize.cjs
 run node crop_guide.cjs
 run node ai.cjs
-run node ai_free.cjs
+run node ai_providers.cjs
 run node ai_gen.cjs
 run node ai_key.cjs
 run node layouts.cjs

@@ -241,6 +241,8 @@ section('common: errors / key');
   ok(k({ status: 429, code: 'cf_3040', message: 'Out of capacity' }) === 'capacity', 'cloudflare out of capacity (3040)');
   ok(k({ code: 'no_account' }) === 'account' && explainError({ code: 'no_account' }).settings && k({ code: 'no_key' }) === 'key', 'missing account ID / key → open settings');
   // ModelScope / Gemini
+  ok(k({ status: 400, code: '400', message: 'API key not valid. Please pass a valid API key.' }) === 'key' && explainError({ status: 400, message: 'API key not valid' }).settings, 'Gemini invalid key (HTTP 400) → key error');
+  ok(k({ status: 429, code: 'RESOURCE_EXHAUSTED', message: 'Quota exceeded for metric: generate_content_free_tier_requests, limit: 0' }) === 'freezero' && k({ status: 429, message: 'You exceeded your current quota' }) === 'quota', 'Gemini free quota 0 → billing hint; other 429 quota unchanged');
   ok(k({ code: 'moderation_blocked', status: 200, message: 'blocked: SAFETY' }) === 'policy', 'Gemini safety block → policy message');
   ok(k({ status: 403, message: 'Access to model black-forest-labs/FLUX.1-Fill-dev is restricted. You must be authenticated to access it. (gated)' }) === 'gated' && explainError({ status: 403, message: 'gated repo' }).settings && k({ status: 403, message: 'forbidden' }) === 'forbidden', 'Hugging Face gated model → accept the terms (before the generic 403)');
   const tf = explainError({ code: 'task_failed', status: 200, message: 'content blocked' });
@@ -502,7 +504,7 @@ section('providers: registry / sizes / config');
   ok(!('openai' in PROVIDERS) && !('openrouter' in PROVIDERS) && !('pollinations' in PROVIDERS), 'OpenAI / OpenRouter / Pollinations are gone');
   for (const id of PROVIDER_IDS) {
     const P = PROVIDERS[id];
-    ok(P.id === id && P.free === true && typeof P.name() === 'string' && typeof P.tag() === 'string' && typeof P.desc() === 'string' && typeof P.howto() === 'string' && typeof P.host() === 'string' && typeof P.privacy('h') === 'string' && typeof P.privacyText('h') === 'string' && P.sizes.length === 3 && Array.isArray(P.modelPresets), 'provider interface: ' + id);
+    ok(P.id === id && typeof P.free === 'boolean' && typeof P.name() === 'string' && typeof P.tag() === 'string' && typeof P.desc() === 'string' && typeof P.howto() === 'string' && typeof P.host() === 'string' && typeof P.privacy('h') === 'string' && typeof P.privacyText('h') === 'string' && P.sizes.length === 3 && Array.isArray(P.modelPresets), 'provider interface: ' + id);
     const all = [P.name(), P.tag(), P.desc(), P.howto(), P.privacy('h'), P.privacyText('h')].join(' ');
     ok(!/openai|openrouter|gpt-image/i.test(all), 'no stale OpenAI/OpenRouter wording: ' + id);
   }

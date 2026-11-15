@@ -1,7 +1,7 @@
 // API 키 입력 흐름 E2E (실기기 제보: "API 입력하면 오류남, 키가 사라짐")
 //  - 원인 1: 설정(모달) 위에서 토스트가 시트 뒤에 가려져 오류 안내가 보이지 않았다 → 이제 모달 위 + 입력 아래 고정 안내
 //  - 입력 정리(Bearer/따옴표/주소째 붙인 계정 ID), 바뀐 칸 안내, 저장 실패(원인 표시)·대체 저장소·읽을 수 없는 키·보관 기능 점검
-//  - 제공자: Cloudflare(계정 ID + 토큰) · ModelScope(토큰) · Pollinations(키 없음)
+//  - 제공자: Cloudflare(계정 ID + 토큰) · ModelScope(토큰) · Gemini(API 키) · Hugging Face(토큰)
 const path = require('path');
 const { launch, close } = require('./lib.cjs');
 const { init } = require('./ai_lib.cjs');
@@ -42,11 +42,12 @@ const FIX = path.resolve(__dirname, '../fixtures');
   await page.click('.msheet .chip[data-id=cloudflare]'); await page.waitForTimeout(150);
   await page.click('.msheet .ai-setup .btn'); await page.waitForTimeout(300);
   check('AI settings opens on Cloudflare (account ID + token)', (await acctField().count()) === 1 && (await keyField().count()) === 1);
-  // 제공자별 칸: Pollinations 는 키 없음 / ModelScope 는 토큰만
-  await M().locator('.chip[data-id=pollinations]').click(); await page.waitForTimeout(120);
-  check('Pollinations needs no key: no key field, no troubleshooting block, no connection test', (await kv()) === '필요 없음' && (await keyField().count()) === 0 && (await acctField().count()) === 0 && (await M().locator('details.ai-adv').count()) === 0 && (await M().locator('.btn', { hasText: '연결 테스트' }).count()) === 0);
-  await M().locator('.chip[data-id=modelscope]').click(); await page.waitForTimeout(120);
-  check('ModelScope asks for the token only', (await keyField().count()) === 1 && (await acctField().count()) === 0 && (await keyField().getAttribute('placeholder')) === 'ModelScope 액세스 토큰');
+  // 제공자별 칸: ModelScope · Gemini · Hugging Face 는 키/토큰만
+  for (const [id, ph] of [['modelscope', 'ModelScope 액세스 토큰'], ['gemini', 'Gemini API 키 (AIza…)'], ['huggingface', 'Hugging Face 토큰 (hf_…)']]) {
+    await M().locator(`.chip[data-id=${id}]`).click(); await page.waitForTimeout(120);
+    check(id + ' asks for the key/token only', (await keyField().count()) === 1 && (await acctField().count()) === 0 && (await keyField().getAttribute('placeholder')) === ph && (await M().locator('details.ai-adv').count()) === 1);
+  }
+  check('only Cloudflare-less providers differ: Hugging Face has no connection test (no safe check endpoint)', (await M().locator('.btn', { hasText: '연결 테스트' }).count()) === 0);
   await M().locator('.chip[data-id=cloudflare]').click(); await page.waitForTimeout(120);
   check('back on Cloudflare: account ID + token again', (await acctField().count()) === 1 && (await keyField().count()) === 1);
 
@@ -150,7 +151,7 @@ const FIX = path.resolve(__dirname, '../fixtures');
   // 닫았다가 다시 열어도 저장된 상태가 보인다
   await M().locator('[aria-label="닫기"]').click(); await page.waitForTimeout(250);
   await page.waitForFunction(() => !!window.__ai.prov.modelscope.key);
-  check('the saved keys survive closing the settings (each provider has its own slot; Pollinations has none)', await page.evaluate(() => !!window.__ai.prov.modelscope.key && !!window.__ai.prov.cloudflare.key && !window.__ai.prov.pollinations.key));
+  check('the saved keys survive closing the settings (each provider has its own slot)', await page.evaluate(() => !!window.__ai.prov.modelscope.key && !!window.__ai.prov.cloudflare.key && !window.__ai.prov.gemini.key && !window.__ai.prov.huggingface.key));
   check('no console errors', h.errors.length === 0, h.errors.slice(0, 3).join(' | '));
   await close(h);
   console.log(bad ? `\n✗ ${bad} check(s) failed` : '\n✓ ai_key all passed');

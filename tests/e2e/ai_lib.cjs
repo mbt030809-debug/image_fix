@@ -1,9 +1,10 @@
 // AI E2E 공용: 가짜 window.Android(기본 브리지 + AI 릴레이) + 페이지 도우미.
 // 가짜 릴레이는 네이티브(AiClient)와 같은 허용 목록(제공자별 경로/본문 형식/쿼리, 결과 이미지 주소 도메인)을 검사해서, 웹이 허용되지 않는 요청을 보내면 'ERR:path' 로 실패한다.
-// 제공자 3종을 흉내 낸다:
+// 제공자 4종을 흉내 낸다:
 //  - cloudflare  : 표시 이미지 편집(FLUX.2, multipart) / 문구 생성(FLUX.1 schnell) / 번역(m2m100) / 모델 목록
-//  - pollinations: GET /prompt/<문구>?width&height&seed → JPEG (키 없음, plMode 로 한도·HTML·텍스트 응답 흉내)
-//  - modelscope  : POST /images/generations → task_id → GET /tasks/{id} (msPolls 번 "진행 중") → 결과 URL → 내려받기(https, 허용 도메인만)
+//  - modelscope  : Qwen-Image-Edit — POST /images/generations(image 데이터 주소 + tt 헤더) → task_id → GET /tasks/{id} (msPolls 번 "진행 중") → 결과 URL → 내려받기(https, 허용 도메인만)
+//  - gemini      : POST /models/<m>:generateContent — 3 parts(문구+원본+표시)=편집, 1 part=문구 생성, GET /models 목록 (gmMode: text | blocked)
+//  - huggingface : POST /fal-ai/fal-ai/flux-lora-fill — 흰색 마스크 안쪽만 채운 결과를 data URI(또는 hfMode='url' 이면 fal 주소) 로
 // 편집 모델은 업로드된 이미지를 실제로 읽어서(표시 이미지와 원본의 차이) 선택 영역만 색칠한 결과를 돌려준다.
 const path = require('path');
 const { OUT, DATE } = require('./lib.cjs');
@@ -15,25 +16,28 @@ const init = () => {
   try { started = sessionStorage.getItem('t_started'); sessionStorage.setItem('t_started', '1'); } catch (e) { /* noop */ }
   let pending = started ? 0 : 1;
   const mkProv = () => ({ key: null, hint: '', extra: '', prot: 'hw', unreadable: false });
-  const prov = { cloudflare: mkProv(), pollinations: mkProv(), modelscope: mkProv() };
+  const prov = { cloudflare: mkProv(), modelscope: mkProv(), gemini: mkProv(), huggingface: mkProv() };
   const S = window.__ai = {
     log: [], specs: [], mode: 'ok', tr: 'ok', jobs: {}, results: {}, delay: 600, setKeyCalls: [], cfBinary: false, keyMode: 'ok', selfTest: 'hw=ok sw=ok', prov,
     cfModels: ['@cf/black-forest-labs/flux-2-klein-4b', '@cf/black-forest-labs/flux-2-dev', '@cf/meta/llama-3.1-8b-instruct'],
-    plMode: 'ok', // Pollinations: ok | rate(429) | html | text
+    gmMode: 'ok', // Gemini: ok | text | blocked
+    hfMode: 'ok', // Hugging Face: ok | url(fal 주소로 답함) | gated(403)
     msMode: 'ok', // ModelScope: ok | fail | noimage | notask | dlhtml
     msPolls: 0, // 성공하기 전에 "진행 중"으로 답하는 횟수 (JS 는 3초 + 4초 간격으로 확인하므로 0 이면 약 3초, 1 이면 약 7초)
     tasks: {}, downloads: [], msImages: {},
   };
   const ROUTES = {
     cloudflare: [['POST', /^\/accounts\/\{account\}\/ai\/run\/@cf\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/, /^(application\/json|multipart\/form-data; boundary=)/], ['GET', /^\/accounts\/\{account\}\/ai\/models\/search$/, null]],
-    pollinations: [['GET', /^\/prompt\/[A-Za-z0-9%._~-]{1,2400}$/, null]],
+    gemini: [['POST', /^\/models\/[A-Za-z0-9][A-Za-z0-9._-]{0,60}:generateContent$/, /^application\/json$/], ['GET', /^\/models$/, null]],
+    huggingface: [['POST', /^\/fal-ai\/fal-ai\/flux-lora-fill$/, /^application\/json$/]],
     modelscope: [['POST', /^\/images\/generations$/, /^application\/json$/], ['GET', /^\/tasks\/[A-Za-z0-9][A-Za-z0-9._-]{5,79}$/, null], ['GET', /^\/models$/, null]],
   };
   /** 결과 이미지 내려받기 주소 검사(네이티브 checkResultUrl 과 같은 규칙): https · 사용자 정보/포트/조각 없음 · 허용 도메인 */
-  const urlOk = (raw) => {
+  const HOSTS = { modelscope: /^([a-z0-9-]+\.)*(aliyuncs\.com|modelscope\.cn|modelscope\.ai)$/, huggingface: /^([a-z0-9-]+\.)*(fal\.media|fal\.run)$/ };
+  const urlOk = (raw, provider) => {
     let u; try { u = new URL(String(raw)); } catch (e) { return false; }
-    return u.protocol === 'https:' && !u.username && !u.password && !u.port && !u.hash
-      && /^([a-z0-9-]+\.)*(aliyuncs\.com|modelscope\.cn|modelscope\.ai)$/.test(u.hostname)
+    return HOSTS[provider] && u.protocol === 'https:' && !u.username && !u.password && !u.port && !u.hash
+      && HOSTS[provider].test(u.hostname)
       && /^\/[A-Za-z0-9._~%!$&'()*+,;=:@/-]{0,600}$/.test(u.pathname)
       && /^[A-Za-z0-9=&._,%:+/~!*'()-]{0,900}$/.test(u.search.slice(1));
   };
@@ -49,6 +53,20 @@ const init = () => {
   const finishJson = (j, id, o) => finishRaw(j, id, 'application/json', textB64(JSON.stringify(o)));
   const bmpOf = async (blob) => createImageBitmap(blob);
   const dataOf = (bmp) => { const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(bmp, 0, 0); return { c, x, d: x.getImageData(0, 0, c.width, c.height) }; };
+  const dataUrlBlob = (u) => { const m = /^data:([^;]+);base64,(.*)$/.exec(String(u)); const b = atob(m[2]); const a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return new Blob([a], { type: m[1] }); };
+  const b64Blob = (b64, type = 'image/png') => dataUrlBlob(`data:${type};base64,${b64}`);
+  /** 마젠타로 표시된 사진(색 덧칠 + 테두리)에서 "편집 영역"을 찾는다: 빨강·파랑이 초록보다 확실히 큰 픽셀 */
+  function magentaMask(d) {
+    const n = d.d.width * d.d.height, m = new Uint8Array(n); let cnt = 0, x0 = d.d.width, y0 = d.d.height, x1 = -1, y1 = -1;
+    for (let p = 0; p < n; p++) { const r = d.d.data[p * 4], g = d.d.data[p * 4 + 1], b = d.d.data[p * 4 + 2]; if (r - g > 60 && b - g > 60) { m[p] = 1; cnt++; const px = p % d.d.width, py = (p / d.d.width) | 0; if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py; } }
+    return { m, cnt, bbox: [x0, y0, x1 + 1, y1 + 1] };
+  }
+  /** 흰 마스크(R>128) 안쪽 = 편집 영역 */
+  function whiteMask(d) {
+    const n = d.d.width * d.d.height, m = new Uint8Array(n); let cnt = 0, x0 = d.d.width, y0 = d.d.height, x1 = -1, y1 = -1;
+    for (let p = 0; p < n; p++) if (d.d.data[p * 4] > 128) { m[p] = 1; cnt++; const px = p % d.d.width, py = (p / d.d.width) | 0; if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py; }
+    return { m, cnt, bbox: [x0, y0, x1 + 1, y1 + 1] };
+  }
   const decodeChunks = (j) => { const bin = atob(j.chunks.join('')); const u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i); return u8; };
   async function waitOrCancel(j) { const end = Date.now() + S.delay; while (Date.now() < end) { if (j.cancelled) { j.state = 'cancelled'; return false; } await sleep(40); } if (j.cancelled) { j.state = 'cancelled'; return false; } return true; }
   /** 표시 이미지(마젠타 덧칠)와 원본의 차이로 "편집 영역" 마스크를 구한다 (원본 해상도) */
@@ -88,11 +106,11 @@ const init = () => {
 
   async function run(id) {
     const j = S.jobs[id], p = j.spec.provider;
-    // ------------------------------------------------------------ ModelScope 결과 이미지 내려받기 (인증 없음)
+    // ------------------------------------------------------------ 결과 이미지 내려받기 (인증 없음): ModelScope(OSS) · Hugging Face(fal)
     if (j.spec.url) {
       S.downloads.push(j.spec.url); S.log.push({ provider: p, kind: 'download', url: j.spec.url });
       await sleep(40);
-      if (S.msMode === 'dlhtml') return finishRaw(j, id, 'text/html', textB64('<html><body>expired</body></html>'));
+      if (S.msMode === 'dlhtml' && p === 'modelscope') return finishRaw(j, id, 'text/html', textB64('<html><body>expired</body></html>'));
       const b64 = S.msImages[j.spec.url];
       if (!b64) return fail(j, 404, 'http_404', 'not found');
       return finishRaw(j, id, 'image/png', b64);
@@ -100,45 +118,74 @@ const init = () => {
     const route = String(j.spec.path).split('?')[0];
     // ------------------------------------------------------------ 목록 / 토큰 확인
     if (S.mode === 'e401' && (route === '/models' || route.endsWith('/ai/models/search'))) return fail(j, 401, 'invalid_api_key', 'Invalid token');
-    if (p === 'modelscope' && route === '/models') { await sleep(40); return finishJson(j, id, { object: 'list', data: [{ id: 'Qwen/Qwen-Image' }] }); }
+    if (p === 'modelscope' && route === '/models') { await sleep(40); return finishJson(j, id, { object: 'list', data: [{ id: 'Qwen/Qwen-Image-Edit' }] }); }
     if (p === 'cloudflare' && route.endsWith('/ai/models/search')) { await sleep(30); return finishJson(j, id, { result: S.cfModels.map((name) => ({ name })), success: true, errors: [], messages: [] }); }
+    if (p === 'gemini' && route === '/models') { await sleep(30); return finishJson(j, id, { models: [{ name: 'models/gemini-2.5-flash-image' }, { name: 'models/gemini-2.5-pro' }, { name: 'models/gemini-3-pro-image-preview' }] }); }
 
-    // ------------------------------------------------------------ Pollinations: 문구만 → JPEG
-    if (p === 'pollinations') {
-      const [seg, qs] = String(j.spec.path).split('?');
-      const q = Object.fromEntries(new URLSearchParams(qs || ''));
-      S.log.push({ provider: p, kind: 'generate', path: String(j.spec.path), prompt: decodeURIComponent(seg.slice('/prompt/'.length)), width: +q.width, height: +q.height, seed: q.seed });
+    // ------------------------------------------------------------ Gemini: generateContent
+    if (p === 'gemini') {
+      const body = JSON.parse(new TextDecoder().decode(decodeChunks(j)));
+      const parts = body.contents[0].parts;
+      const model = route.slice('/models/'.length).replace(/:generateContent$/, '');
+      const isEdit = parts.length >= 3;
+      const aspect = body.generationConfig && body.generationConfig.imageConfig ? body.generationConfig.imageConfig.aspectRatio : '1:1';
+      const rec = { provider: p, kind: isEdit ? 'edit' : 'generate', path: String(j.spec.path), model, prompt: parts[0].text, nParts: parts.length, aspect, modalities: (body.generationConfig || {}).responseModalities };
+      let A = null, B = null;
+      if (isEdit) { A = await bmpOf(b64Blob(parts[1].inlineData.data, parts[1].inlineData.mimeType)); B = await bmpOf(b64Blob(parts[2].inlineData.data, parts[2].inlineData.mimeType)); const orig = dataOf(A); const region = diffMask(orig, dataOf(B)); Object.assign(rec, { imgW: A.width, imgH: A.height, markedW: B.width, markedH: B.height, transparent: region.cnt, bbox: region.bbox }); rec.orig = orig; rec.region = region; }
+      const keep = { orig: rec.orig, region: rec.region }; delete rec.orig; delete rec.region;
+      S.log.push(rec);
       if (!(await waitOrCancel(j))) return;
-      if (S.plMode === 'rate') return fail(j, 429, 'http_429', 'Too Many Requests');
+      if (S.mode === 'e401') return fail(j, 400, '400', 'API key not valid. Please pass a valid API key.');
+      if (S.mode === 'e429free') return fail(j, 429, 'RESOURCE_EXHAUSTED', 'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0');
+      if (S.mode === 'e429') return fail(j, 429, 'RESOURCE_EXHAUSTED', 'You exceeded your current quota, please check your plan and billing details.');
+      if (S.gmMode === 'text') return finishJson(j, id, { candidates: [{ content: { parts: [{ text: 'I am sorry, I cannot edit images.' }] }, finishReason: 'STOP' }] });
+      if (S.gmMode === 'blocked') return finishJson(j, id, { promptFeedback: { blockReason: 'SAFETY' } });
+      let b64;
+      if (isEdit) b64 = await toPng(paintResult(keep.orig, keep.region, A.width, A.height));
+      else { const [w, h] = aspect === '3:2' ? [1152, 768] : aspect === '2:3' ? [768, 1152] : [1024, 1024]; b64 = await solid(w, h, [30, 160, 60], 'image/png'); }
+      return finishJson(j, id, { candidates: [{ content: { role: 'model', parts: [{ text: 'Here is the image.' }, { inlineData: { mimeType: 'image/png', data: b64 } }] }, finishReason: 'STOP' }] });
+    }
+
+    // ------------------------------------------------------------ Hugging Face: FLUX.1 Fill (fal) — 흰 마스크 안쪽만 채운다
+    if (p === 'huggingface') {
+      const body = JSON.parse(new TextDecoder().decode(decodeChunks(j)));
+      const A = await bmpOf(dataUrlBlob(body.image_url)), M = await bmpOf(dataUrlBlob(body.mask_url));
+      const orig = dataOf(A), region = whiteMask(dataOf(M));
+      S.log.push({ provider: p, kind: 'edit', path: String(j.spec.path), type: j.spec.type, prompt: body.prompt, keys: Object.keys(body), sync: body.sync_mode, imgW: A.width, imgH: A.height, maskW: M.width, maskH: M.height, transparent: region.cnt, bbox: region.bbox });
+      if (!(await waitOrCancel(j))) return;
+      if (S.hfMode === 'gated') return fail(j, 403, 'http_403', 'Access to model black-forest-labs/FLUX.1-Fill-dev is restricted. You must be authenticated to access it.');
       if (modeFail(j, p)) return;
-      if (S.plMode === 'html') return finishRaw(j, id, 'text/html', textB64('<html><body>maintenance</body></html>'));
-      if (S.plMode === 'text') return finishRaw(j, id, 'text/plain', textB64('Queue full, please wait 45 seconds'));
-      return finishRaw(j, id, 'image/jpeg', await solid(+q.width || 768, +q.height || 768, [220, 120, 30], 'image/jpeg'));
+      const out = await toPng(paintResult(orig, region, A.width, A.height));
+      if (S.hfMode === 'url') { const url = `https://v3.fal.media/files/zebra/res-${id}.png`; S.msImages[url] = out; return finishJson(j, id, { images: [{ url, content_type: 'image/png' }] }); }
+      return finishJson(j, id, { images: [{ url: 'data:image/png;base64,' + out, content_type: 'image/png' }] });
     }
 
     // ------------------------------------------------------------ ModelScope: 작업 만들기 → 상태 확인
     if (p === 'modelscope' && route === '/images/generations') {
       const body = JSON.parse(new TextDecoder().decode(decodeChunks(j)));
-      S.log.push({ provider: p, kind: 'submit', type: j.spec.type, model: body.model, prompt: body.prompt, size: body.size, keys: Object.keys(body) });
+      const rec = { provider: p, kind: 'submit', type: j.spec.type, tt: j.spec.tt || '', model: body.model, prompt: body.prompt, size: body.size, keys: Object.keys(body), hasImage: !!body.image, sameImage: body.image === body.image_url };
+      let result = null;
+      if (body.image) { const A = await bmpOf(dataUrlBlob(body.image)); const orig = dataOf(A), region = magentaMask(orig); Object.assign(rec, { imgW: A.width, imgH: A.height, transparent: region.cnt, bbox: region.bbox }); result = await toPng(paintResult(orig, region, A.width, A.height)); }
+      S.log.push(rec);
       await sleep(40);
       if (modeFail(j, p)) return;
       if (S.msMode === 'notask') return finishJson(j, id, {});
       const taskId = 'task-' + (++taskSeq) + '-abcdef';
-      S.tasks[taskId] = { polls: 0, size: body.size };
+      S.tasks[taskId] = { polls: 0, size: body.size, result };
       return finishJson(j, id, { task_id: taskId, request_id: 'req-' + taskSeq });
     }
     if (p === 'modelscope' && route.startsWith('/tasks/')) {
       const tid = route.slice('/tasks/'.length), T = S.tasks[tid];
-      S.log.push({ provider: p, kind: 'poll', taskId: tid });
+      S.log.push({ provider: p, kind: 'poll', taskId: tid, tt: j.spec.tt || '' });
       await sleep(30);
       if (!T) return fail(j, 404, 'http_404', 'task not found');
       T.polls++;
       if (S.msMode === 'fail') return finishJson(j, id, { task_status: 'FAILED', errors: { message: 'prompt blocked', code: '400' } });
       if (T.polls <= S.msPolls) return finishJson(j, id, { task_status: T.polls === 1 ? 'PENDING' : 'RUNNING' });
       if (S.msMode === 'noimage') return finishJson(j, id, { task_status: 'SUCCEED', output_images: [] });
-      const [w, h] = String(T.size).split('x').map(Number);
       const url = `https://muse-ai.oss-cn-hangzhou.aliyuncs.com/img/${tid}.png?Expires=1&Signature=abc%3D`;
-      S.msImages[url] = await solid(w || 1024, h || 1024, [40, 90, 200], 'image/png');
+      if (T.result) S.msImages[url] = T.result;
+      else { const [w, h] = String(T.size).split('x').map(Number); S.msImages[url] = await solid(w || 1024, h || 1024, [40, 90, 200], 'image/png'); }
       return finishJson(j, id, { task_status: 'SUCCEED', output_images: [url] });
     }
 
@@ -184,7 +231,6 @@ const init = () => {
     aiSetKey: (provider, k, extra) => {
       S.setKeyCalls.push([provider, k ? 'key' : '', extra]);
       const P = prov[provider]; if (!P) return 'ERR:provider';
-      if (provider === 'pollinations') return 'ERR:nokey';
       if (provider === 'cloudflare' && extra && !/^[0-9a-f]{32}$/i.test(extra)) return 'ERR:badextra';
       if (k && S.keyMode === 'store') return 'ERR:store:hw:KeyStoreException/sw:IOException';
       if (k) { if (provider === 'cloudflare' && !extra && !P.extra) return 'ERR:badextra'; P.key = k; P.hint = k.slice(0, 3) + '…' + k.slice(-4); P.prot = S.keyMode === 'sw' ? 'sw' : 'hw'; P.unreadable = S.keyMode === 'unreadable'; } else if (!P.key) return 'ERR:badkey';
@@ -197,8 +243,9 @@ const init = () => {
       let s; try { s = JSON.parse(spec); } catch (e) { return 'ERR:spec'; }
       const rs = ROUTES[s.provider]; if (!rs) return 'ERR:provider';
       if (s.url) { // 결과 이미지 내려받기: ModelScope 만 · GET · 허용 도메인(https)
-        if (s.provider !== 'modelscope' || s.method !== 'GET' || s.path || !urlOk(s.url)) return 'ERR:path';
+        if (s.method !== 'GET' || s.path || !urlOk(s.url, s.provider)) return 'ERR:path';
       } else {
+        if (s.tt && (s.provider !== 'modelscope' || !/^(image_generation|image-to-image-generation)$/.test(s.tt))) return 'ERR:spec';
         const pth = String(s.path || '').split('?')[0];
         const r = rs.find((x) => x[0] === s.method && x[1].test(pth));
         if (!r) return 'ERR:path';
@@ -211,7 +258,7 @@ const init = () => {
     aiSend: (id) => {
       const j = S.jobs[id], pr = prov[j.spec.provider];
       j.state = 'running';
-      const needsKey = j.spec.provider !== 'pollinations' && !j.spec.url; // 결과 내려받기는 키를 쓰지 않는다
+      const needsKey = !j.spec.url; // 결과 내려받기는 키를 쓰지 않는다
       if (needsKey && !pr.key) { fail(j, 401, 'no_key', 'no api key'); return true; }
       if (needsKey && pr.unreadable) { fail(j, 401, 'key_unreadable', 'stored api key cannot be decrypted'); return true; }
       if (String(j.spec.path).includes('{account}') && !pr.extra) { fail(j, 0, 'no_account', 'account id is missing'); return true; }

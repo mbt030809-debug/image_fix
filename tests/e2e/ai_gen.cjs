@@ -1,4 +1,4 @@
-// 문구만으로 그리는 흐름 E2E: 홈 "AI로 이미지 만들기"(Pollinations 키 없이 → Cloudflare FLUX.1 schnell 번역→생성 → ModelScope 비동기 작업+내려받기) →
+// 문구만으로 그리는 흐름 E2E: 홈 "AI로 이미지 만들기"(Cloudflare FLUX.1 schnell 번역→생성 → Gemini) →
 // 편집기로 열기, 그리고 영역 수정의 "문구로 채우기"(Cloudflare, 사진 미전송, 선택 안쪽만 합성)
 const path = require('path');
 const { launch, close, waitIdle, selTool } = require('./lib.cjs');
@@ -30,49 +30,17 @@ let HH = null;
   await page.reload();
   h.errors.length = 0;
 
-  // ---------------------------------------------------------------- 1) 홈: Pollinations (키 없이)
-  console.log('▶ 홈: AI로 이미지 만들기 — Pollinations (키 없이)');
+  // ---------------------------------------------------------------- 1) 홈: 열기
+  console.log('▶ 홈: AI로 이미지 만들기');
   await page.waitForSelector('.home .tile', { timeout: 15000 });
   check('home shows the "Create with AI" tile (native only)', (await page.locator('.home .tile >> text=AI로 이미지 만들기').count()) === 1);
   await h.shot('g1_home');
   await page.click('.home .tile >> text=AI로 이미지 만들기'); await page.waitForTimeout(250);
-  check('sheet opens on Pollinations (nothing is set up, so the keyless provider comes first)', (await page.locator('.msheet h2').first().textContent()) === 'AI로 이미지 만들기' && (await page.locator('.msheet .chip[data-id=pollinations]').getAttribute('aria-checked')) === 'true');
-  check('exactly three providers are offered (OpenAI / OpenRouter are gone)', (await chipIds()).join() === 'cloudflare,pollinations,modelscope', (await chipIds()).join());
-  check('keyless: no setup card, no translate switch; the shape chips are shown', (await page.locator('.msheet .ai-setup').count()) === 0 && (await page.locator('.msheet .switch').count()) === 0 && (await page.locator('.msheet .seg button >> text=정사각').count()) === 1 && (await page.locator('.msheet .seg button >> text=가로').count()) === 1 && (await page.locator('.msheet .seg button >> text=세로').count()) === 1);
-  check('provider note: no signup / key, about 45 s apart, no photo is sent', /가입도 키도 필요 없어요/.test(await noteText().catch(() => '')) || (await page.locator('.msheet .sheet-note >> text=가입도 키도 필요 없어요').count()) === 1);
-  await page.click('.msheet .chip >> text=벚꽃이 흩날리는 한국 전통 마을'); await page.waitForTimeout(100);
-  check('example chip fills the prompt', (await page.inputValue('.msheet textarea.ai-prompt')).includes('벚꽃'));
-  await page.click('.msheet .seg button >> text=가로'); await page.waitForTimeout(80);
-  await h.shot('g2_generate_form');
-  await page.click('.msheet .btn >> text=만들기');
-  const ct1 = await consentText();
-  check('text-only consent: names the host, says no photo is sent', /image\.pollinations\.ai/.test(ct1) && /사진은 보내지 않아요/.test(ct1) && !/주변 이미지/.test(ct1) && /45초/.test(ct1), ct1.slice(0, 80));
-  await page.click('.dialog .btn >> text=동의하고 계속');
-  await waitDone();
-  let log = await logOf();
-  const pg = log.find((l) => l.provider === 'pollinations');
-  check('the Korean prompt was sent as typed (no translation) with the landscape class', pg && pg.prompt === '벚꽃이 흩날리는 한국 전통 마을' && pg.width === 896 && pg.height === 640 && log.every((l) => l.provider === 'pollinations'), JSON.stringify(pg));
-  const dims1 = await page.evaluate(() => { const i = document.querySelector('.ai-gen-result'); return [i.naturalWidth, i.naturalHeight]; });
-  check('result image is shown (896×640 JPEG)', dims1[0] === 896 && dims1[1] === 640, JSON.stringify(dims1));
-  check('shows the prompt used; Pollinations note about the 45 s interval', /벚꽃이 흩날리는 한국 전통 마을/.test(await page.locator('.msheet .sheet-note >> text=사용한 문구').textContent()) && (await page.locator('.msheet .sheet-note >> text=약 45초에 한 장').count()) === 1);
-  await h.shot('g3_generated');
-  await page.click('.msheet .btn >> text=편집하기');
-  await page.waitForFunction(() => window.imagefix.screen === 'editor' && window.imagefix.editor.base && !window.imagefix.editor.busy, null, { timeout: 30000 });
-  const ei = await editorInfo();
-  check('"Edit" opens the generated image in the editor', ei.w === 896 && ei.h === 640 && ei.name === 'AI 이미지' && (await page.locator('.msheet').count()) === 0, JSON.stringify(ei));
-
-  // 한도(429) 안내
-  await page.evaluate(() => window.imagefix.goHome(true));
-  await page.click('.home .tile >> text=AI로 이미지 만들기'); await page.waitForTimeout(250);
-  await page.fill('.msheet textarea.ai-prompt', 'a cute cat');
-  await page.evaluate(() => { window.__ai.plMode = 'rate'; });
-  await page.click('.msheet .btn >> text=만들기'); await page.waitForSelector('.ai-msg.err', { timeout: 20000 });
-  check('Pollinations rate limit: "one image per ~45 seconds" (consent is remembered, no second dialog)', /45초/.test(await page.locator('.ai-msg.err').textContent()) && (await page.locator('.dialog').count()) === 0);
-  await page.evaluate(() => { window.__ai.plMode = 'ok'; });
+  check('sheet opens on Cloudflare (nothing is set up yet)', (await page.locator('.msheet h2').first().textContent()) === 'AI로 이미지 만들기' && (await page.locator('.msheet .chip[data-id=cloudflare]').getAttribute('aria-checked')) === 'true');
+  check('only text-to-image providers are offered: Cloudflare and Gemini', (await chipIds()).join() === 'cloudflare,gemini', (await chipIds()).join());
 
   // ---------------------------------------------------------------- 2) Cloudflare FLUX.1 schnell: 키 설정 → 번역 → 생성
   console.log('▶ 홈: Cloudflare FLUX.1 schnell (번역 → 생성)');
-  await page.click('.msheet .chip[data-id=cloudflare]'); await page.waitForTimeout(150);
   check('Cloudflare tab: setup card + translate switch (on by default), no shape chips (fixed 1024×1024)', (await page.locator('.msheet .ai-setup').count()) === 1 && (await page.locator('.msheet .switch').getAttribute('aria-checked')) === 'true' && (await page.locator('.msheet .seg button >> text=가로').count()) === 0);
   await page.click('.msheet .ai-setup .btn'); await page.waitForTimeout(250);
   await page.fill('.msheet:last-of-type input[name=imagefix-ai-account]', ACC);
@@ -121,30 +89,34 @@ let HH = null;
   check('free daily allowance message for generation', /오늘의 무료 사용량/.test(await page.locator('.ai-msg.err').textContent()));
   await page.evaluate(() => { window.__ai.mode = 'ok'; });
 
-  // ---------------------------------------------------------------- 3) ModelScope: 작업 → 확인 → 내려받기
-  console.log('▶ 홈: ModelScope (비동기 작업)');
-  await page.click('.msheet .chip[data-id=modelscope]'); await page.waitForTimeout(150);
-  check('ModelScope tab: token-only setup card, shape chips, no translate switch', (await page.locator('.msheet .ai-setup').count()) === 1 && /액세스 토큰/.test(await page.locator('.msheet .ai-setup').textContent()) && (await page.locator('.msheet .seg button >> text=세로').count()) === 1 && (await page.locator('.msheet .switch').count()) === 0);
+  const nTrBefore = (await logOf()).filter((l) => l.kind === 'translate').length;
+  // ---------------------------------------------------------------- 3) Gemini: 키 → 모양 → 생성
+  console.log('▶ 홈: Gemini (나노 바나나)');
+  await page.click('.msheet .chip[data-id=gemini]'); await page.waitForTimeout(150);
+  check('Gemini tab: key setup card, shape chips, no translate switch', (await page.locator('.msheet .ai-setup').count()) === 1 && /Gemini API 키/.test(await page.locator('.msheet .ai-setup').textContent()) && (await page.locator('.msheet .seg button >> text=세로').count()) === 1 && (await page.locator('.msheet .switch').count()) === 0);
   await page.click('.msheet .ai-setup .btn'); await page.waitForTimeout(250);
-  check('settings opened on ModelScope: token only (no account ID)', (await page.locator('.msheet:last-of-type input[name=imagefix-ai-account]').count()) === 0 && (await page.locator('.msheet .chip[data-id=modelscope]').last().getAttribute('aria-checked')) === 'true');
-  await page.fill('.msheet:last-of-type input[type=password]', 'ms-1a2b3c4d-5e6f7a8b');
+  check('settings opened on Gemini: key only (no account ID)', (await page.locator('.msheet:last-of-type input[name=imagefix-ai-account]').count()) === 0 && (await page.locator('.msheet .chip[data-id=gemini]').last().getAttribute('aria-checked')) === 'true');
+  await page.fill('.msheet:last-of-type input[type=password]', 'AIzaSyTestKey-abcdef123456');
   await page.click('.msheet:last-of-type .btn >> text=키 저장'); await page.waitForTimeout(200);
   await page.locator('.msheet [aria-label="닫기"]').last().click(); await page.waitForTimeout(250);
-  check('after saving the token the setup card is gone', (await page.locator('.msheet .ai-setup').count()) === 0);
+  check('after saving the key the setup card is gone', (await page.locator('.msheet .ai-setup').count()) === 0);
   await page.fill('.msheet textarea.ai-prompt', 'A traditional Korean village with falling cherry blossoms');
-  await page.click('.msheet .seg button >> text=세로'); await page.waitForTimeout(80);
+  await page.click('.msheet .seg button >> text=가로'); await page.waitForTimeout(80);
+  await h.shot('g5_generate_gemini');
   await page.click('.msheet .btn >> text=만들기');
   const ct3 = await consentText();
-  check('text-only consent: names the ModelScope host, says no photo is sent and where the image comes from', /api-inference\.modelscope\.cn/.test(ct3) && /사진은 보내지 않아요/.test(ct3) && /알리바바/.test(ct3), ct3.slice(0, 80));
+  check('text-only consent: names the Gemini host and says no photo is sent', /generativelanguage\.googleapis\.com/.test(ct3) && /사진은 보내지 않아요/.test(ct3) && /Google/.test(ct3), ct3.slice(0, 80));
   await page.click('.dialog .btn >> text=동의하고 계속');
-  await waitDone(45000);
+  await waitDone(30000);
   log = await logOf();
-  const sub = log.filter((l) => l.kind === 'submit').at(-1), dl = log.filter((l) => l.kind === 'download');
-  check('submit: Qwen-Image, the prompt as typed, the portrait size class', sub && sub.model === 'Qwen/Qwen-Image' && sub.prompt === 'A traditional Korean village with falling cherry blossoms' && sub.size === '768x1152', JSON.stringify(sub));
-  check('the result was downloaded from the returned Alibaba Cloud address', dl.length === 1 && /^https:\/\/muse-ai\.oss-cn-hangzhou\.aliyuncs\.com\//.test(dl[0].url));
+  const gg = log.filter((l) => l.provider === 'gemini' && l.kind === 'generate').at(-1);
+  check('generateContent with the prompt as typed (no translation), landscape aspect ratio, nothing else', gg && gg.model === 'gemini-2.5-flash-image' && gg.nParts === 1 && gg.prompt === 'A traditional Korean village with falling cherry blossoms' && gg.aspect === '3:2' && log.filter((l) => l.kind === 'translate').length === nTrBefore, JSON.stringify(gg));
   const dims3 = await page.evaluate(() => { const i = document.querySelector('.ai-gen-result'); return [i.naturalWidth, i.naturalHeight]; });
-  check('result image is shown (768×1152)', dims3[0] === 768 && dims3[1] === 1152, JSON.stringify(dims3));
-  await h.shot('g5_generated_modelscope');
+  check('result image is shown (1152×768)', dims3[0] === 1152 && dims3[1] === 768, JSON.stringify(dims3));
+  await page.evaluate(() => { window.__ai.gmMode = 'blocked'; });
+  await page.click('.msheet .btn >> text=다시 만들기'); await page.waitForSelector('.ai-msg.err', { timeout: 20000 });
+  check('a safety block is explained', /안전 정책/.test(await page.locator('.ai-msg.err').textContent()));
+  await page.evaluate(() => { window.__ai.gmMode = 'ok'; });
   await closeModal();
 
   // ---------------------------------------------------------------- 4) 영역 수정: 문구로 채우기 (Cloudflare, 사진 미전송)
@@ -155,7 +127,7 @@ let HH = null;
   const before = { corner: await px(0.1, 0.1) };
   await lasso();
   await page.click('.seg button >> text=AI 요청'); await page.waitForTimeout(150);
-  check('the tool follows the provider chosen last (ModelScope paints from the prompt only: no mode switch)', /ModelScope/.test(await page.locator('.sheet-body .row.wrap .sheet-note').first().textContent()) && (await page.locator('.seg button >> text=사진 보고 편집').count()) === 0);
+  check('the tool follows the provider chosen last (Gemini offers the same mode switch)', /Gemini/.test(await page.locator('.sheet-body .row.wrap .sheet-note').first().textContent()) && (await page.locator('.seg button >> text=문구로 채우기').count()) === 1);
   await page.click('.sheet .btn >> text=바꾸기'); await page.waitForTimeout(200);
   await page.click('.msheet .chip[data-id=cloudflare]'); await page.waitForTimeout(150);
   await closeModal();
