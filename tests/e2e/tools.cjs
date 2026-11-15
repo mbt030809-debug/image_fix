@@ -1,6 +1,6 @@
 // 모든 도구를 차례로 열어 대표 동작을 실행하고 스크린샷/오류를 수집
 const path = require('path');
-const { launch, close, openPhoto, waitIdle } = require('./lib.cjs');
+const { launch, close, openPhoto, waitIdle, selTool } = require('./lib.cjs');
 const FIX = path.resolve(__dirname, '../fixtures');
 const fails = [];
 async function step(name, fn) { try { await fn(); } catch (e) { fails.push(name + ': ' + String(e.message).split('\n')[0]); console.log('  ✗', name, String(e.message).split('\n')[0]); } }
@@ -12,7 +12,7 @@ async function step(name, fn) { try { await fn(); } catch (e) { fails.push(name 
   const stage = await page.locator('.screen:not([hidden]) .stage').first().boundingBox();
   const cx = stage.x + stage.width / 2, cy = stage.y + stage.height / 2;
   const setSlider = async (idx, v) => page.evaluate(([i, v]) => { const s = document.querySelectorAll('.sheet .slider')[i]; s.value = v; s.dispatchEvent(new Event('input', { bubbles: true })); s.dispatchEvent(new Event('change', { bubbles: true })); }, [idx, v]);
-  const tool = async (id, wait = 500) => { await page.click(`[data-tool=${id}]`); await waitIdle(page, wait); };
+  const tool = async (id, wait = 500) => { await selTool(page, id); await waitIdle(page, wait); };
   const drag = async (pts) => { await page.mouse.move(pts[0][0], pts[0][1]); await page.mouse.down(); for (const p of pts.slice(1)) await page.mouse.move(p[0], p[1], { steps: 4 }); await page.mouse.up(); await waitIdle(page, 300); };
 
   await step('adjust', async () => { await tool('adjust'); await setSlider(0, 30); await waitIdle(page, 300); await page.click('.chip >> text=대비'); await setSlider(0, 35); await page.click('.sheet-grab'); await page.waitForTimeout(250); await h.shot('t01_adjust'); });

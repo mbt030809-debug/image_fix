@@ -7,7 +7,7 @@ import { IconBtn, Btn, toast, confirmDialog, openModal, handleBack, Segmented, S
 import { orientedSize } from './engine/geometry.js';
 import { makeGeom, composeDoc, drawLayers, drawBackground, applyFrame, frameLayout, fontCss, fontEvents } from './compose.js';
 import { bridge } from './bridge.js';
-import { TOOLS } from './tools/index.js';
+import { TOOLS, GROUPS, TOOL_BY_ID, groupOf } from './tools/index.js';
 import * as Drafts from './drafts.js';
 
 const PIX_KEYS = ['geo', 'retouch', 'adj', 'filter', 'fx', 'locals', 'lutRef'];
@@ -67,32 +67,196 @@ export class Editor {
     this.view.onView = () => { this.updateZoomChip(); this.drawOverlay(); };
     this.view.onResize = () => this.drawOverlay();
 
-    // 시트
+    // 시트 (위쪽 손잡이를 잡고 위아래로 끌면 높이가 바뀐다 — initSheetResize)
     this.sheetTitle = h('h2', { id: 'sheet-title' });
     this.sheetActions = h('div', { class: 'row', style: { gap: '0' } });
-    this.grab = h('div', { class: 'sheet-grab', role: 'button', tabIndex: 0, 'aria-label': t('패널 펼치기/접기', 'Expand or collapse panel') });
-    this.grab.addEventListener('click', () => this.togglePeek());
+    this.grab = h('div', { class: 'sheet-grab', role: 'button', tabIndex: 0, 'aria-label': t('패널 크기 조절: 위아래로 끌기 · 누르면 접기/펼치기', 'Resize panel: drag up/down · tap to collapse/expand') });
+    this.sheetHead = h('div', { class: 'sheet-head' }, this.sheetTitle, this.sheetActions);
     this.sheetBody = h('div', { class: 'sheet-body' });
-    this.sheetEl = h('div', { class: 'sheet', hidden: true, role: 'tabpanel', 'aria-labelledby': 'sheet-title' }, this.grab, h('div', { class: 'sheet-head' }, this.sheetTitle, this.sheetActions), this.sheetBody);
+    this.sheetEl = h('div', { class: 'sheet', hidden: true, role: 'tabpanel', 'aria-labelledby': 'sheet-title' }, this.grab, this.sheetHead, this.sheetBody);
 
-    // 도구 스트립
-    this.strip = h('div', { class: 'strip', role: 'tablist', 'aria-label': t('도구', 'Tools') });
-    this.toolBtns = new Map();
-    for (const tl of TOOLS) {
-      const b = h('button', { class: 'tool', type: 'button', role: 'tab', 'aria-selected': 'false', 'data-tool': tl.id }, h('span', { class: 'pill' }, icon(tl.icon)), h('span', { class: 'lbl' }, tl.label()));
-      b.addEventListener('click', () => this.toggleTool(tl.id));
-      this.toolBtns.set(tl.id, b); this.strip.append(b);
+    // 도구 줄: 아래 = 상위 목록(분류) / 그 위 = 선택한 분류의 하위 목록(subrow). 분류를 누르면 하위 목록이 뜨고, 하위를 누르면 패널이 열린다.
+    this.strip = h('div', { class: 'strip groups', role: 'tablist', 'aria-label': t('도구 분류', 'Tool groups') });
+    this.subrow = h('div', { class: 'subrow', role: 'tablist', 'aria-label': t('도구', 'Tools'), hidden: true });
+    this.groupBtns = new Map();   // 분류 id → 버튼
+    this.toolBtns = new Map();    // 도구 id → 버튼(하위 버튼, 단독 분류는 분류 버튼) — 선택 표시용
+    this.subBtns = new Map();     // 하위 항목 id → 버튼(도구 + 동작)
+    this.groupId = null;
+    for (const g of GROUPS) {
+      const b = h('button', { class: 'tool', type: 'button', role: 'tab', 'aria-selected': 'false', 'data-group': g.id }, h('span', { class: 'pill' }, icon(g.icon)), h('span', { class: 'lbl' }, g.label()));
+      this.groupBtns.set(g.id, b); this.strip.append(b);
+      if (g.direct) { // 하위 없이 바로 도구가 열린다(레이어)
+        const id = g.items[0];
+        b.dataset.tool = id;
+        b.addEventListener('click', () => this.toggleTool(id));
+        this.toolBtns.set(id, b);
+        continue;
+      }
+      b.addEventListener('click', () => this.toggleGroup(g.id));
+      for (const id of g.items) {
+        const def = TOOL_BY_ID[id];
+        const sb = h('button', { class: 'subtool', type: 'button', role: 'tab', 'aria-selected': 'false' }, icon(def.icon), h('span', { class: 'lbl' }, def.label()));
+        if (def.run) { sb.dataset.action = id; sb.addEventListener('click', () => def.run(this)); } // 창을 여는 동작(AI 이미지 만들기/설정)
+        else { sb.dataset.tool = id; sb.addEventListener('click', () => this.toggleTool(id)); this.toolBtns.set(id, sb); }
+        this.subBtns.set(id, sb);
+      }
     }
-    this.strip.addEventListener('keydown', (e) => {
+    const arrows = (row) => (e) => {
       if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-      const arr = [...this.toolBtns.values()], i = arr.indexOf(document.activeElement);
+      const arr = [...row.querySelectorAll('button')], i = arr.indexOf(document.activeElement);
       if (i < 0) return;
-      const n = arr[(i + (e.key === 'ArrowRight' ? 1 : arr.length - 1)) % arr.length]; n.focus(); e.preventDefault();
-    });
+      arr[(i + (e.key === 'ArrowRight' ? 1 : arr.length - 1)) % arr.length].focus(); e.preventDefault();
+    };
+    this.strip.addEventListener('keydown', arrows(this.strip));
+    this.subrow.addEventListener('keydown', arrows(this.subrow));
 
-    this.el = h('div', { class: 'editor' }, this.topbar, this.stage, this.sheetEl, this.strip);
+    this.el = h('div', { class: 'editor ed' }, this.topbar, this.stage, this.sheetEl, this.subrow, this.strip);
+    this.initSheetResize();
     this.updateButtons();
   }
+
+  // ------------------------------------------------------------ 패널(시트) 높이 조절
+  /** 손잡이(—)나 제목 줄을 잡고 위아래로 끌면 패널 높이가 바뀐다. 도구마다 기억(편집기 높이 대비 비율). 누르면 기존처럼 접기/펼치기(기억한 높이는 지움) */
+  initSheetResize() {
+    const THRESH = 6, STEP = 24;
+    const rail = () => window.matchMedia('(orientation: landscape) and (max-height: 500px), (min-width: 840px)').matches; // 가로/태블릿: 옆 패널(크기 고정)
+    this._rail = rail;
+    let drag = null;
+    const onDown = (e) => {
+      if (rail() || (e.button != null && e.button > 0)) return;
+      if (e.target.closest && e.target.closest('button, input, select, textarea, a, label, [role="slider"]')) return;
+      drag = { id: e.pointerId, y0: e.clientY, h0: this.sheetEl.getBoundingClientRect().height, b: null, active: false, el: e.currentTarget };
+      this._sheetMoved = false;
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) { /* noop */ } // 마우스는 빠르게 움직이면 손잡이 밖으로 나가므로 처음부터 붙잡는다(터치는 자동)
+    };
+    const onMove = (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const dy = drag.y0 - e.clientY;
+      if (!drag.active) {
+        if (Math.abs(dy) < THRESH) return;
+        drag.active = true; this._sheetMoved = true;
+        drag.b = this.sheetBounds();
+        this.el.classList.add('sizing');
+      }
+      e.preventDefault();
+      this.setSheetHeight(drag.h0 + dy, drag.b);
+    };
+    const onUp = (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const d = drag; drag = null;
+      try { d.el.releasePointerCapture(d.id); } catch (err) { /* noop */ }
+      this.el.classList.remove('sizing');
+      if (!d.active) return;
+      const cur = this.sheetEl.getBoundingClientRect().height;
+      if (cur < d.b.min + 28) this.setSheetHeight(d.b.min, d.b); // 거의 다 내렸으면 접힘(머리말만)으로
+      this.rememberSheet();
+      this.afterLayout();
+    };
+    for (const el of [this.grab, this.sheetHead]) {
+      el.addEventListener('pointerdown', onDown);
+      el.addEventListener('pointermove', onMove);
+      el.addEventListener('pointerup', onUp);
+      el.addEventListener('pointercancel', onUp);
+      el.addEventListener('lostpointercapture', onUp); // 창 밖에서 손을 떼도 끝낸다
+    }
+    this.grab.addEventListener('click', () => {
+      if (this._sheetMoved) { this._sheetMoved = false; return; } // 끌고 난 뒤의 click 은 무시
+      this.forgetSheet(); this.togglePeek();
+    });
+    this.grab.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.grab.click(); return; }
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      if (rail()) return;
+      this.setSheetHeight(this.sheetEl.getBoundingClientRect().height + (e.key === 'ArrowUp' ? STEP : -STEP));
+      this.rememberSheet(); this.afterLayout();
+    });
+    // 편집기 크기(회전·키보드)가 바뀌면 기억한 비율로 다시 맞춘다
+    new ResizeObserver(() => { if (this.sheetEl.classList.contains('sized') && !this.el.classList.contains('sizing')) this.applySheetPref(); }).observe(this.el);
+  }
+
+  /** 시트 높이 한계: 접힘(손잡이+제목 줄) ~ 편집기 − 위/아래 막대 − 최소 사진 영역 */
+  sheetBounds() {
+    const eh = this.el.clientHeight || window.innerHeight;
+    const vis = (el) => (el.hidden ? 0 : el.offsetHeight);
+    const fixed = this.topbar.offsetHeight + vis(this.subrow) + this.strip.offsetHeight;
+    const bs = getComputedStyle(this.sheetBody);
+    const min = this.grab.offsetHeight + this.sheetHead.offsetHeight + (parseFloat(bs.paddingTop) || 0) + (parseFloat(bs.paddingBottom) || 0); // 접힘: 손잡이 + 제목 줄(+ 본문 안쪽 여백)
+    const stageMin = Math.max(120, Math.round(eh * 0.16));
+    return { eh, min, max: Math.max(min + 40, eh - fixed - stageMin), stageMin };
+  }
+
+  /** 높이(px)를 적용. 낮으면 간단 모드(peek), 충분히 크면 전체 목록 모드로 도구 내용을 바꾼다(이력 현상 12px) */
+  setSheetHeight(px, b = this.sheetBounds()) {
+    const hh = Math.round(Math.max(b.min, Math.min(b.max, px)));
+    this.sheetEl.style.setProperty('--sheet-h', hh + 'px');
+    this.sheetEl.classList.add('sized');
+    this.el.style.setProperty('--stage-min', b.stageMin + 'px');
+    const fullAt = Math.max(280, b.eh * 0.34);
+    const wantPeek = this.peek ? !(hh >= fullAt + 12) : (hh <= fullAt - 12);
+    if (wantPeek !== !!this.peek) { this.setPeek(wantPeek); if (this.tool && this.tool.onPeek) this.tool.onPeek(wantPeek); }
+    return hh;
+  }
+
+  clearSheetHeight() {
+    this.sheetEl.classList.remove('sized');
+    this.sheetEl.style.removeProperty('--sheet-h');
+    this.el.style.removeProperty('--stage-min');
+  }
+
+  /** 현재 도구의 높이를 비율로 기억(설정에 저장) */
+  rememberSheet() {
+    if (!this.toolId || !this.sheetEl.classList.contains('sized')) return;
+    const b = this.sheetBounds();
+    const m = this.app.settings.sheetH && typeof this.app.settings.sheetH === 'object' ? this.app.settings.sheetH : (this.app.settings.sheetH = {});
+    m[this.toolId] = Math.round((this.sheetEl.getBoundingClientRect().height / b.eh) * 1000) / 1000;
+    this.app.saveSettings();
+  }
+
+  /** 현재 도구의 기억한 높이를 지우고 기본 크기로 */
+  forgetSheet() {
+    const m = this.app.settings.sheetH;
+    if (this.toolId && m && typeof m === 'object' && this.toolId in m) { delete m[this.toolId]; this.app.saveSettings(); }
+    this.clearSheetHeight();
+  }
+
+  /** 도구를 열 때: 기억한 높이가 있으면 적용(가로/태블릿은 제외) */
+  applySheetPref() {
+    const m = this.app.settings.sheetH;
+    const r = this.toolId && m && typeof m === 'object' ? Number(m[this.toolId]) : 0;
+    if (!(r > 0.05 && r < 0.95) || this._rail()) { this.clearSheetHeight(); return; }
+    const b = this.sheetBounds();
+    this.setSheetHeight(r * b.eh, b);
+  }
+
+  // ------------------------------------------------------------ 상위/하위 목록
+  /** 상위 목록 누르기: 하위 목록을 펼친다(같은 걸 다시 누르면 접고 열린 도구도 닫는다). 다른 분류의 도구가 열려 있으면 닫는다 */
+  toggleGroup(gid) {
+    const g = GROUPS.find((x) => x.id === gid);
+    if (!g) return;
+    if (this.groupId === gid) { this.closeTool(true); this.setGroup(null); return; }
+    if (this.tool && groupOf(this.toolId) !== gid) this.closeTool(true);
+    this.setGroup(gid);
+  }
+
+  /** 펼친 분류 지정(null = 모두 접힘). 단독 분류(레이어)는 하위 목록을 띄우지 않는다 */
+  setGroup(gid) {
+    const g = GROUPS.find((x) => x.id === gid) || null;
+    this.groupId = g ? g.id : null;
+    for (const [id, b] of this.groupBtns) b.setAttribute('aria-selected', String(!!g && id === g.id));
+    if (g && !g.direct) {
+      this.subrow.replaceChildren(...g.items.map((id) => this.subBtns.get(id)));
+      this.subrow.classList.toggle('dense', g.items.length >= 5);
+      this.subrow.hidden = false;
+    } else {
+      this.subrow.hidden = true;
+    }
+    if (this.sheetEl.classList.contains('sized')) this.applySheetPref(); // 막대 높이가 바뀌면 한계도 바뀐다
+    this.afterLayout();
+  }
+
+  /** 도구/분류를 모두 닫는다(새 사진을 열거나 홈으로 갈 때) */
+  closeAll() { this.closeTool(false); this.setGroup(null); }
 
   bindCompare() {
     let t0 = 0, held = false;
@@ -131,7 +295,7 @@ export class Editor {
   // ------------------------------------------------------------ 문서 열기
   async openBitmap(bitmap, name, blob) {
     this.loadingEl.hidden = false;
-    this.closeTool(false);
+    this.closeAll();
     this.assets.clear();
     const mem = bridge.info().memMB || 4096;
     const maxSide = this.app.settings.maxSide === 'auto' ? (mem < 3000 ? 3072 : mem < 5000 ? 4096 : 5120) : Number(this.app.settings.maxSide);
@@ -149,7 +313,7 @@ export class Editor {
   }
   async openBuffer(w, h, buffer, name, blob) {
     this.loadingEl.hidden = false;
-    this.closeTool(false);
+    this.closeAll();
     this.assets.clear();
     const info = await this.engine.loadBuffer(w, h, buffer);
     this.fileName = name || 'canvas';
@@ -408,13 +572,16 @@ export class Editor {
     const def = TOOLS.find((x) => x.id === id);
     if (!def) return;
     this.toolId = id;
+    this.setGroup(groupOf(id)); // 다른 경로(레이어의 "편집", 리터치의 인물 보정 등)로 열려도 분류/하위 목록을 맞춘다
     for (const [k, b] of this.toolBtns) b.setAttribute('aria-selected', String(k === id));
     clear(this.sheetBody); clear(this.sheetActions);
     this.sheetEl.hidden = false;
+    this.clearSheetHeight();
     this.setPeek(false);
-    this.setTitle(def.label());
+    this.setTitle(def.title ? def.title() : def.label());
     this.cropOverride = null;
     this.tool = def.open(this, this.sheetBody) || {};
+    this.applySheetPref(); // 이 도구에서 끌어 조절해 둔 높이가 있으면 적용
     this.view.setHandler(this.tool.pointer || null);
     const b = this.toolBtns.get(id);
     b && b.scrollIntoView && b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
@@ -438,7 +605,10 @@ export class Editor {
     this.view.setHandler(null);
     for (const b of this.toolBtns.values()) b.setAttribute('aria-selected', 'false');
     this.sheetEl.hidden = true;
+    this.clearSheetHeight();
     clear(this.sheetBody); clear(this.sheetActions);
+    const og = GROUPS.find((x) => x.id === this.groupId);
+    if (og && og.direct) this.setGroup(null);
     this.requestRender('full');
     this.paint();
     this.afterLayout();
@@ -550,6 +720,7 @@ export class Editor {
       if (this.tool.cancel) this.closeTool(false); else this.closeTool(true);
       return true;
     }
+    if (this.groupId) { this.setGroup(null); return true; } // 펼친 하위 목록이 있으면 먼저 접는다
     this.requestClose();
     return true;
   }

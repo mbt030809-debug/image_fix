@@ -11,7 +11,7 @@ import { openAiSettings, aiConfig } from './tools/aisettings.js';
 import { openGenerate } from './tools/aigenerate.js';
 
 const SETTINGS_KEY = 'imagefix.settings';
-const VERSION = '1.3.1';
+const VERSION = '1.4.0';
 
 async function decodeFile(file) {
   const opts = { imageOrientation: 'from-image', premultiplyAlpha: 'none', colorSpaceConversion: 'default' };
@@ -170,7 +170,7 @@ export class App {
   showCollage() { this.screen = 'collage'; this.homeEl.hidden = true; this.editor.el.hidden = true; this.collage.el.hidden = false; requestAnimationFrame(() => this.collage.layoutCanvas()); }
   showEditor() { this.screen = 'editor'; this.homeEl.hidden = true; this.collage.el.hidden = true; this.editor.el.hidden = false; this.editor.stats.hidden = !this.settings.showStats; requestAnimationFrame(() => this.editor.view.resize()); }
   goHome(keepDraft) {
-    this.screen = 'home'; this.editor.closeTool(false); this.editor.el.hidden = true; this.collage.el.hidden = true; this.homeEl.hidden = false;
+    this.screen = 'home'; this.editor.closeAll(); this.editor.el.hidden = true; this.collage.el.hidden = true; this.homeEl.hidden = false;
     clearTimeout(this.editor.draftT);
     if (keepDraft) this.refreshDraftCard(); else Drafts.clearAll().then(() => this.refreshDraftCard());
   }

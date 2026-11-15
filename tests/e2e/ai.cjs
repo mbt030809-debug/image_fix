@@ -1,7 +1,7 @@
 // AI 수정 E2E: 가짜 window.Android(AI 릴레이)로 선택(올가미) → 키 설정 → 동의 → 요청(마스크/이미지 검증) → 결과 합성(선택 안쪽만) →
 // 적용/실행 취소/레이어/저장 내보내기 → 오류·취소·변형 2장 → 자동 복구(새로고침 후 복원)까지 확인한다.
 const path = require('path');
-const { launch, close, waitIdle } = require('./lib.cjs');
+const { launch, close, waitIdle, selTool } = require('./lib.cjs');
 const FIX = path.resolve(__dirname, '../fixtures');
 
 const { init, installRoute, helpers } = require('./ai_lib.cjs');
@@ -21,9 +21,9 @@ let HH = null;
 
   // ---------------------------------------------------------------- 1) 열기 + 올가미 선택
   console.log('▶ 선택');
-  await page.click('[data-tool=ai]'); await waitIdle(page, 300);
+  await selTool(page, 'ai'); await waitIdle(page, 300);
   check('AI tool opens with step tabs', (await page.locator('.seg button >> text=영역 선택').count()) === 1 && (await page.locator('.seg button >> text=AI 요청').count()) === 1);
-  check('tool strip has AI edit label', (await page.locator('[data-tool=ai] .lbl').textContent()) === 'AI 수정');
+  check('AI group in the bottom bar + "영역 수정" in its sub-row, panel titled "AI 영역 수정"', (await page.locator('.strip [data-group=aitools] .lbl').textContent()) === 'AI 도구' && (await page.locator('.subrow [data-tool=ai] .lbl').textContent()) === '영역 수정' && (await page.locator('#sheet-title').textContent()) === 'AI 영역 수정');
   const before = { center: await px(0.51, 0.49), corner: await px(0.1, 0.1) };
   await lasso();
   let s = await sel();
@@ -104,7 +104,7 @@ let HH = null;
   await page.evaluate(() => window.imagefix.editor.redo()); await page.waitForTimeout(200);
   check('redo restores it', (await layers()).length === 1);
   await page.evaluate(() => window.imagefix.editor.closeTool(true)); await page.waitForTimeout(200);
-  await page.click('[data-tool=layers]'); await page.waitForTimeout(200);
+  await selTool(page, 'layers'); await page.waitForTimeout(200);
   const rowTxt = await page.locator('.sheet .layer-row .nm').first().textContent();
   check('layers list labels the AI layer', /AI 수정/.test(rowTxt), rowTxt);
   await page.evaluate(() => window.imagefix.editor.closeTool(true));
@@ -118,7 +118,7 @@ let HH = null;
 
   // ---------------------------------------------------------------- 5) 오류 / 취소
   console.log('▶ 오류 · 취소');
-  await page.click('[data-tool=ai]'); await waitIdle(page, 200);
+  await selTool(page, 'ai'); await waitIdle(page, 200);
   await lasso();
   await page.evaluate(() => { window.__ai.mode = 'e401'; });
   await page.click('.seg button >> text=AI 요청'); await page.fill('.sheet textarea.ai-prompt', '하늘을 바꿔 주세요');

@@ -1,11 +1,11 @@
 const path = require('path');
-const { launch, close, openPhoto, waitIdle } = require('./lib.cjs');
+const { launch, close, openPhoto, waitIdle, selTool } = require('./lib.cjs');
 const FIX = path.resolve(__dirname, '../fixtures');
 (async () => {
   const h = await launch();
   const { page } = h;
   await openPhoto(page, path.join(FIX, 'landscape.jpg'));
-  await page.click('[data-tool=retouch]'); await waitIdle(page, 500);
+  await selTool(page, 'retouch'); await waitIdle(page, 500);
   const stage = await page.locator('.stage').boundingBox();
   console.log('stage', JSON.stringify(stage));
   const tx = stage.x + stage.width * 0.3, ty = stage.y + stage.height * 0.5;

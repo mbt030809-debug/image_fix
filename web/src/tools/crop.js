@@ -6,9 +6,30 @@ import { Chips, Slider, IconBtn, Btn } from '../ui/components.js';
 import { applyOrientOp, orientedSize, maxCropRect, fitCropInside, cropValid, MAP, mapForAngleChange } from '../engine/geometry.js';
 
 const ASPECTS = [
-  ['free', '자유', 'Free', 0], ['orig', '원본', 'Original', -1], ['1:1', '1:1', '1:1', 1], ['4:5', '4:5', '4:5', 4 / 5], ['5:4', '5:4', '5:4', 5 / 4],
+  ['free', '자유', 'Free', 0], ['orig', '원본', 'Original', -1], ['passport', '여권 3.5×4.5', 'Passport 35×45', 35 / 45], ['1:1', '1:1', '1:1', 1], ['4:5', '4:5', '4:5', 4 / 5], ['5:4', '5:4', '5:4', 5 / 4],
   ['3:4', '3:4', '3:4', 3 / 4], ['4:3', '4:3', '4:3', 4 / 3], ['2:3', '2:3', '2:3', 2 / 3], ['3:2', '3:2', '3:2', 3 / 2], ['9:16', '9:16', '9:16', 9 / 16], ['16:9', '16:9', '16:9', 16 / 9], ['21:9', '21:9', '21:9', 21 / 9],
 ];
+
+/**
+ * 규격 사진 가이드(참고용). 여권: 가로 3.5×세로 4.5cm, 얼굴 길이(정수리~턱) 3.2~3.6cm = 사진 높이의 71~80%
+ * (ICAO 기준을 따르는 외교부 여권사진 규격, 지자체 여권 안내문 기준). 정수리 위 여백 3mm 는 일반적인 배치를 보여 주는 참고값이다.
+ * 정수리를 topMm 선에 맞추면 턱 끝이 [topMm+faceMin, topMm+faceMax] 띠 안에 들어와야 한다.
+ */
+export const GUIDES = {
+  passport: {
+    wmm: 35, hmm: 45, faceMin: 32, faceMax: 36, topMm: 3,
+    short: () => t('정수리를 위 선에, 턱 끝을 초록 띠에 맞춰요', 'Crown on the top line, chin inside the green band'),
+    long: () => t('여권 규격 기준이에요: 가로 3.5×세로 4.5cm, 얼굴 길이(정수리~턱) 3.2~3.6cm = 사진 높이의 71~80%, 흰 배경 정면. 정수리 선 위치는 참고용이에요. 주민등록증·운전면허 사진도 3.5×4.5cm지만 제출처의 최신 규정을 꼭 확인해 주세요.',
+      'Passport spec: 35×45 mm, crown to chin 32–36 mm = 71–80% of the photo height, white background, frontal. The crown line position is a reference. ID card and driver licence photos are also 35×45 mm — always check the latest rules of where you submit.'),
+  },
+};
+
+/** 가이드 선 위치(자르기 사각형 화면 좌표 기준): 정수리 선, 턱 끝 허용 띠(min~max), 얼굴 타원 */
+export function guideLayout(G, x0, y0, x1, y1) {
+  const w = x1 - x0, hh = y1 - y0, f = (mm) => y0 + (hh * mm) / G.hmm;
+  const yTop = f(G.topMm), yMin = f(G.topMm + G.faceMin), yMax = f(G.topMm + G.faceMax), yMid = (yMin + yMax) / 2;
+  return { x0, y0, x1, y1, w, h: hh, cx: (x0 + x1) / 2, yTop, yMin, yMax, yMid, ell: { cx: (x0 + x1) / 2, cy: (yTop + yMid) / 2, rx: w * 0.34, ry: (yMid - yTop) / 2 } };
+}
 
 /** 캔버스 정규화 좌표 매핑을 문서(레이어/로컬)에 적용 */
 export function mapDocCoords(doc, fn, dRot = 0, swapXY = false) {
@@ -58,10 +79,20 @@ export function open(ed, body) {
   }
 
   // ---- 패널 ----------------------------------------------------------
+  // 규격 사진(여권)을 고르면 얼굴 크기 기준을 캔버스에 겹쳐 보여 주고, 한 줄 안내를 붙인다
+  const guideNote = h('p', { class: 'sheet-note crop-guide-note', hidden: true });
+  const guideLong = h('p', { class: 'sheet-note', hidden: true });
+  function showGuideNote() {
+    const G = GUIDES[aspectKey];
+    guideNote.hidden = !G;
+    guideLong.hidden = !G || !!ed.peek;
+    if (G) { guideNote.textContent = G.short(); guideLong.textContent = G.long(); }
+  }
   const chips = Chips({ label: t('비율', 'Aspect ratio'), items: ASPECTS.map(([id, ko, en]) => ({ id, label: t(ko, en) })), value: 'free', onSelect: (id) => {
     aspectKey = id;
     const a = aspectVal();
     if (a) { crop = maxCropRect(geo, a, info.w, info.h); }
+    showGuideNote();
     ed.invalidateOverlay();
   } });
 
@@ -94,7 +125,7 @@ export function open(ed, body) {
   }
 
   const resetBtn = Btn(t('초기화', 'Reset'), 'text', () => {
-    geo = { r: 0, f: 0, a: 0, pv: 0, ph: 0, crop: [0, 0, 1, 1] }; crop = [0, 0, 1, 1]; ops.length = 0; angleBase = 0; aspectKey = 'free'; chips.set('free');
+    geo = { r: 0, f: 0, a: 0, pv: 0, ph: 0, crop: [0, 0, 1, 1] }; crop = [0, 0, 1, 1]; ops.length = 0; angleBase = 0; aspectKey = 'free'; chips.set('free'); showGuideNote();
     angleS.set(0); vS.set(0); hS.set(0);
     ed.preview((d) => ({ ...setIn(d, 'geo', { ...geo }), layers: baseDoc.layers, locals: baseDoc.locals }));
     ed.invalidateOverlay();
@@ -108,10 +139,10 @@ export function open(ed, body) {
   const viewMode = { v: 'main' };
   const lowerGroup = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
   const row = h('div', { class: 'row wrap', style: { gap: '0' } }, rotL, rotR, flipH, flipV, h('div', { class: 'grow' }));
-  body.append(chips.el, row, angleS.el);
+  body.append(chips.el, guideNote, row, angleS.el);
   const extra = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } }, vS.el, hS.el);
   extra.hidden = true;
-  body.append(extra);
+  body.append(extra, guideLong);
   void gridSw; void viewMode; void lowerGroup;
 
   pushGeo();
@@ -212,14 +243,38 @@ export function open(ed, body) {
     cancel() { drag = null; ed.invalidateOverlay(); },
   };
 
+  /** 정수리 선 + 턱 끝 허용 띠 + 중앙선 + 얼굴 타원(참고). 프레임 안쪽에만 그린다 */
+  function drawGuide(ctx, G, x0, y0, x1, y1) {
+    const L = guideLayout(G, x0, y0, x1, y1);
+    if (L.w < 40 || L.h < 40) return;
+    const line = (ax, ay, bx, by) => { ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke(); };
+    ctx.save();
+    ctx.beginPath(); ctx.rect(x0, y0, L.w, L.h); ctx.clip();
+    ctx.fillStyle = 'rgba(70, 220, 130, .24)'; ctx.fillRect(x0, L.yMin, L.w, L.yMax - L.yMin); // 턱 끝 허용 띠
+    ctx.shadowColor = 'rgba(0,0,0,.65)'; ctx.shadowBlur = 2; ctx.lineWidth = 1.5; ctx.setLineDash([7, 4]);
+    ctx.strokeStyle = 'rgba(120, 255, 175, .95)';
+    line(x0, L.yTop, x1, L.yTop); line(x0, L.yMin, x1, L.yMin); line(x0, L.yMax, x1, L.yMax);
+    ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1; line(L.cx, y0, L.cx, y1); // 가로 중앙
+    ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.ellipse(L.ell.cx, L.ell.cy, L.ell.rx, L.ell.ry, 0, 0, Math.PI * 2); ctx.stroke(); // 얼굴 틀(참고)
+    ctx.setLineDash([]); ctx.shadowBlur = 0;
+    if (L.w >= 120) { // 라벨
+      ctx.font = '600 11px system-ui, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+      const tag = (txt, y) => { const tw = ctx.measureText(txt).width + 12; ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x1 - 6 - tw, y - 9, tw, 18, 9) : ctx.rect(x1 - 6 - tw, y - 9, tw, 18); ctx.fill(); ctx.fillStyle = '#9dffc4'; ctx.fillText(txt, x1 - 12, y + 0.5); };
+      tag(t('정수리', 'Crown'), Math.max(y0 + 12, L.yTop - 11));
+      tag(L.w >= 170 ? t(`턱 끝 · 얼굴 ${G.faceMin / 10}~${G.faceMax / 10}cm`, `Chin · face ${G.faceMin}–${G.faceMax} mm`) : t('턱 끝', 'Chin'), (L.yMin + L.yMax) / 2);
+    }
+    ctx.restore();
+  }
+
   function drawOverlay(ctx, view) {
     const [x0, y0, x1, y1] = rectScreen();
     const w = view.sw, hh = view.sh;
     // 바깥 어둡게
     ctx.fillStyle = 'rgba(0,0,0,.55)';
     ctx.beginPath(); ctx.rect(0, 0, w, hh); ctx.rect(x0, y0, x1 - x0, y1 - y0); ctx.fill('evenodd');
-    // 격자
-    if (showGrid) {
+    // 격자 (규격 사진 가이드가 있을 때는 선이 겹쳐 복잡하니 끈다)
+    if (showGrid && !GUIDES[aspectKey]) {
       ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.lineWidth = 1;
       ctx.beginPath();
       for (let i = 1; i < 3; i++) {
@@ -228,6 +283,8 @@ export function open(ed, body) {
       }
       ctx.stroke();
     }
+    // 규격 사진 가이드(얼굴 크기 기준)
+    if (GUIDES[aspectKey]) drawGuide(ctx, GUIDES[aspectKey], x0, y0, x1, y1);
     // 테두리
     ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.shadowColor = 'rgba(0,0,0,.4)'; ctx.shadowBlur = 2;
     ctx.strokeRect(x0 + 0.5, y0 + 0.5, x1 - x0, y1 - y0);
@@ -287,7 +344,10 @@ export function open(ed, body) {
     apply: applyCrop,
     cancel() { ed.store.revert(); },
     close() { ed.cropOverride = null; },
-    onPeek(peek) { extra.hidden = peek; },
+    onPeek(peek) { extra.hidden = peek; guideLong.hidden = peek || !GUIDES[aspectKey]; },
+    /** 테스트/디버그: 현재 가이드(없으면 null) — 화면 좌표의 선 위치 */
+    guideInfo() { const G = GUIDES[aspectKey]; if (!G) return null; const [a, b, c, d] = rectScreen(); return { key: aspectKey, ...guideLayout(G, a, b, c, d) }; },
+    cropRect() { return crop.slice(); },
     refresh() {},
     toggleGrid() { showGrid = !showGrid; ed.app.settings.grid = showGrid; ed.app.saveSettings(); ed.invalidateOverlay(); },
   };

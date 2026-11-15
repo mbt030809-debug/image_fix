@@ -1,7 +1,7 @@
 // 크기 도구(프리셋/직접 입력/맞춤 방식) + 저장 결과 해상도, 번들 폰트 로드, 유동화 라벨 검증
 const path = require('path');
 const fs = require('fs');
-const { launch, close, openPhoto, waitIdle } = require('./lib.cjs');
+const { launch, close, openPhoto, waitIdle, selTool } = require('./lib.cjs');
 const FIX = path.resolve(__dirname, '../fixtures');
 
 function jpegSize(buf) {
@@ -33,7 +33,7 @@ function jpegSize(buf) {
   };
 
   // 1) 프리셋: 인스타 4:5 → 채우기
-  await page.click('[data-tool=resize]'); await waitIdle(page, 300);
+  await selTool(page, 'resize'); await waitIdle(page, 300);
   await h.shot('z1_resize_panel');
   await page.click('.chip >> text=인스타 4:5');
   await waitIdle(page, 500);
@@ -47,7 +47,7 @@ function jpegSize(buf) {
   check('export is 1080x1350', s1 && s1[0] === 1080 && s1[1] === 1350, JSON.stringify(s1));
 
   // 2) 여백(letterbox) 1080x1920
-  await page.click('[data-tool=resize]'); await waitIdle(page, 300);
+  await selTool(page, 'resize'); await waitIdle(page, 300);
   await page.click('.chip >> text=스토리·릴스');
   await page.click('.seg button >> text=여백'); await waitIdle(page, 600);
   await h.shot('z3_resize_bars');
@@ -58,7 +58,7 @@ function jpegSize(buf) {
   check('export is 1080x1920', s2 && s2[0] === 1080 && s2[1] === 1920, JSON.stringify(s2));
 
   // 3) 직접 입력(가로 800, 비율 고정) + 늘이기
-  await page.click('[data-tool=resize]'); await waitIdle(page, 300);
+  await selTool(page, 'resize'); await waitIdle(page, 300);
   await page.fill('input[aria-label="가로(px)"]', '800'); await page.dispatchEvent('input[aria-label="가로(px)"]', 'change');
   await page.click('.seg button >> text=늘이기'); await waitIdle(page, 300);
   const o3 = await page.evaluate(() => window.imagefix.editor.doc().out);
@@ -68,13 +68,13 @@ function jpegSize(buf) {
   check('export matches custom size', s3 && s3[0] === o3.w && s3[1] === o3.h, JSON.stringify(s3) + ' vs ' + o3.w + 'x' + o3.h);
 
   // 4) 해제
-  await page.click('[data-tool=resize]'); await waitIdle(page, 300);
+  await selTool(page, 'resize'); await waitIdle(page, 300);
   await page.click('.btn >> text=지정 해제'); await waitIdle(page, 400);
   await page.click('[aria-label="적용"]'); await waitIdle(page, 300);
   check('clear resets out/frame', await page.evaluate(() => { const d = window.imagefix.editor.doc(); return !d.out && !(d.frame && d.frame.fromResize); }));
 
   // 5) 번들 폰트
-  await page.click('[data-tool=text]'); await waitIdle(page, 300);
+  await selTool(page, 'text'); await waitIdle(page, 300);
   await page.click('.btn >> text=텍스트 추가'); await waitIdle(page, 300);
   await page.fill('.sheet textarea', '안녕하세요 Hello'); await page.dispatchEvent('.sheet textarea', 'change');
   await page.click('.chip >> text=블랙한산스'); await page.waitForTimeout(1200);
@@ -87,7 +87,7 @@ function jpegSize(buf) {
   await page.evaluate(() => window.__onBack());
 
   // 6) 유동화 라벨
-  await page.click('[data-tool=retouch]'); await waitIdle(page, 300);
+  await selTool(page, 'retouch'); await waitIdle(page, 300);
   check('liquify tab labelled 유동화', (await page.locator('.seg button >> text=유동화').count()) === 1);
   await page.click('.seg button >> text=유동화');
   check('twirl ccw mode exists', (await page.locator('.chip >> text=비틀기 ↺').count()) === 1);

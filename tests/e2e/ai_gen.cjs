@@ -1,7 +1,7 @@
 // 문구만으로 그리는 무료 모델(Cloudflare FLUX.1 schnell) E2E: 홈 "AI로 이미지 만들기"(번역→생성→편집기로 열기) +
 // 영역 편집의 "문구로 채우기"(사진 미전송, 선택 안쪽만 합성) + OpenAI 생성(유료)
 const path = require('path');
-const { launch, close, waitIdle } = require('./lib.cjs');
+const { launch, close, waitIdle, selTool } = require('./lib.cjs');
 const { init, installRoute, helpers } = require('./ai_lib.cjs');
 const FIX = path.resolve(__dirname, '../fixtures');
 
@@ -89,7 +89,7 @@ let HH = null;
   console.log('▶ 영역 편집: 문구로 채우기');
   await page.evaluate(() => window.imagefix.goHome(true));
   await openFixture();
-  await page.click('[data-tool=ai]'); await waitIdle(page, 300);
+  await selTool(page, 'ai'); await waitIdle(page, 300);
   const before = { corner: await px(0.1, 0.1) };
   await lasso();
   await page.click('.seg button >> text=AI 요청'); await page.waitForTimeout(150);

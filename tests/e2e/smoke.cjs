@@ -1,5 +1,5 @@
 const path = require('path');
-const { launch, close, openPhoto, waitIdle } = require('./lib.cjs');
+const { launch, close, openPhoto, waitIdle, selTool } = require('./lib.cjs');
 const FIX = path.resolve(__dirname, '../fixtures');
 
 (async () => {
@@ -11,7 +11,7 @@ const FIX = path.resolve(__dirname, '../fixtures');
   const info = await page.evaluate(() => { const e = window.imagefix.editor; return { base: e.base && [e.base.w, e.base.h], logical: e.logical, tool: e.toolId, zoom: e.zoomChip.textContent, photo: [e.view.photo.width, e.view.photo.height] }; });
   console.log('editor:', JSON.stringify(info));
   // 조정 도구
-  await page.click('[data-tool=adjust]');
+  await selTool(page, 'adjust');
   await waitIdle(page);
   await h.shot('03_adjust_peek');
   // 슬라이더 조작 (노출 +40)
@@ -23,14 +23,14 @@ const FIX = path.resolve(__dirname, '../fixtures');
   await page.waitForTimeout(300);
   await h.shot('05_adjust_expanded');
   // 필터
-  await page.click('[data-tool=filter]');
+  await selTool(page, 'filter');
   await waitIdle(page, 600);
   await h.shot('06_filters');
   await page.click('.thumb[data-id=teal]');
   await waitIdle(page, 400);
   await h.shot('07_filter_teal');
   // 자르기
-  await page.click('[data-tool=crop]');
+  await selTool(page, 'crop');
   await waitIdle(page, 400);
   await h.shot('08_crop');
   console.log('errors:', h.errors.length ? '\n' + h.errors.join('\n') : 'none');

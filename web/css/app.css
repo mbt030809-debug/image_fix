@@ -119,9 +119,20 @@ input, textarea, select { font: inherit; color: inherit; user-select: text; -web
 .sheet { position: relative; z-index: 20; background: var(--c-s2); border-radius: var(--r-xl) var(--r-xl) 0 0; box-shadow: var(--shadow-2); display: flex; flex-direction: column; min-height: 0; max-height: 42dvh; transition: transform var(--dur-slow) var(--ease-out); }
 .sheet[hidden] { display: none !important; }
 .sheet.peek .sheet-body { max-height: 196px; }
+.sheet.sized { height: var(--sheet-h); max-height: none; }
+.sheet.sized .sheet-body { max-height: none; }
 .sheet-grab { position: relative; flex: none; height: 24px; display: flex; align-items: center; justify-content: center; touch-action: none; }
 .sheet-grab::before { content: ""; width: 32px; height: 4px; border-radius: 2px; background: var(--c-outline); }
 .sheet-grab::after { content: ""; position: absolute; inset: -8px 0 -4px; }
+/* 편집기 패널: 손잡이를 잡고 위아래로 끌어 높이 조절 (넓은 터치 영역 + 제목 줄도 잡을 수 있다) */
+.editor.ed .sheet-grab { height: 32px; cursor: ns-resize; }
+.editor.ed .sheet-grab::before { width: 44px; height: 5px; border-radius: 3px; transition: background-color var(--dur-fast) var(--ease-standard), width var(--dur-fast) var(--ease-standard); }
+.editor.ed .sheet-grab::after { inset: -12px 0 -4px; }
+.editor.ed .sheet-grab:focus-visible::before, .editor.ed .sheet-grab:active::before, .editor.ed.sizing .sheet-grab::before { background: var(--c-accent); width: 56px; }
+.editor.ed .sheet > .sheet-head { touch-action: none; }
+.editor.ed.sizing, .editor.ed.sizing * { user-select: none; -webkit-user-select: none; }
+.editor.ed.sizing .sheet { transition: none; }
+.editor.ed .stage { min-height: var(--stage-min, 35dvh); }
 .sheet-head { flex: none; display: flex; align-items: center; gap: 4px; min-height: 48px; padding: 0 8px 0 var(--gutter); }
 .sheet-head h2 { flex: 1; min-width: 0; font-size: 1rem; line-height: 1.5rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sheet-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; padding: 0 var(--gutter) 12px; }
@@ -145,6 +156,26 @@ input, textarea, select { font: inherit; color: inherit; user-select: text; -web
 .tool[aria-selected="true"] .lbl { font-weight: 700; color: var(--c-text); }
 .tool .dot { position: absolute; top: 10px; right: 14px; width: 8px; height: 8px; border-radius: 50%; background: var(--c-accent); box-shadow: 0 0 0 2px var(--c-s1); }
 
+/* 상위 목록: 6개가 가로를 균등 분할(스크롤 없음) */
+.editor.ed { grid-template-rows: auto minmax(0, 1fr) auto auto auto; }
+.strip.groups { overflow: hidden; padding: 0 4px var(--pb); touch-action: manipulation; -webkit-mask-image: none; mask-image: none; }
+.strip.groups .tool { flex: 1 1 0; width: auto; min-width: 0; }
+.strip.groups .tool .pill { width: min(56px, calc(100% - 4px)); }
+.strip.groups .tool .lbl { max-width: 100%; }
+@media (max-width: 340px) { .strip.groups .tool .lbl { font-size: .6875rem; } }
+/* 하위 목록: 선택한 상위 목록의 도구(5개 이하 — 한눈에) */
+.subrow { position: relative; z-index: 20; display: flex; gap: 8px; padding: 8px 12px; background: var(--c-s1); border-top: 1px solid var(--c-outline-v); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; touch-action: pan-x; }
+.subrow::-webkit-scrollbar { display: none; }
+.subrow[hidden] { display: none !important; }
+.subtool { flex: 1 0 auto; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; border-radius: 20px; background: var(--c-s2); color: var(--c-text-2); font-size: .8125rem; line-height: 1.25rem; font-weight: 500; white-space: nowrap; transition: background-color var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard); }
+.subtool .ic { width: 18px; height: 18px; flex: none; }
+.subtool .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* 항목이 5개 이상이면 아이콘을 빼고 글자만(좁은 폰에서도 한 줄에 다 보이게) */
+.subrow.dense .subtool .ic { display: none; }
+.subrow.dense .subtool { padding: 0 6px; }
+.subtool:active { background: var(--c-s3); }
+.subtool[aria-selected="true"] { background: var(--c-accent-c); color: var(--c-on-accent-c); font-weight: 700; }
+
 /* 가로 모드 / 태블릿: 레일 + 사이드 패널 */
 @media (orientation: landscape) and (max-height: 500px), (min-width: 840px) {
   .editor { grid-template-columns: 72px minmax(0, 1fr) 320px; grid-template-rows: auto minmax(0, 1fr); }
@@ -155,6 +186,18 @@ input, textarea, select { font: inherit; color: inherit; user-select: text; -web
   .sheet { grid-column: 3; grid-row: 2; border-radius: 0; max-height: none; box-shadow: none; border-left: 1px solid var(--c-outline-v); }
   .sheet-grab { display: none; }
   .sheet.peek .sheet-body { max-height: none; }
+  /* 편집기: 분류 레일(72px) | 하위 레일(분류를 펼쳤을 때만) | 사진 | 옆 패널 */
+  .editor.ed { grid-template-columns: 72px auto minmax(0, 1fr) 320px; grid-template-rows: auto minmax(0, 1fr); }
+  .editor.ed .strip { grid-column: 1; grid-row: 2; }
+  .editor.ed .strip.groups { overflow-y: auto; }
+  .editor.ed .strip.groups .tool { flex: 1 1 0; width: 72px; height: auto; min-height: 50px; max-height: 76px; }
+  .editor.ed .strip.groups .tool .pill { width: 56px; }
+  .editor.ed .subrow { grid-column: 2; grid-row: 2; flex-direction: column; width: 76px; padding: 6px 4px; gap: 6px; overflow-x: hidden; overflow-y: auto; border-top: 0; border-left: 1px solid var(--c-outline-v); touch-action: pan-y; }
+  .editor.ed .subtool { flex: none; flex-direction: column; justify-content: center; gap: 2px; min-height: 56px; padding: 6px 2px; border-radius: 12px; font-size: .6875rem; line-height: 1rem; white-space: normal; text-align: center; }
+  .editor.ed .subrow.dense .subtool .ic { display: block; }
+  .editor.ed .stage { grid-column: 3; grid-row: 2; min-height: 0; }
+  .editor.ed .sheet { grid-column: 4; grid-row: 2; }
+  .editor.ed .sheet.sized { height: auto; }
 }
 
 /* ---------- 폼 컨트롤 ---------- */

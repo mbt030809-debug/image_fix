@@ -1,6 +1,6 @@
 // 네이티브 브리지 계약 검증: 가짜 window.Android 를 주입해 공유 열기 / 저장(청크) / 공유 / 뒤로가기를 확인
 const path = require('path');
-const { launch, close, waitIdle } = require('./lib.cjs');
+const { launch, close, waitIdle, selTool } = require('./lib.cjs');
 const FIX = path.resolve(__dirname, '../fixtures');
 const init = () => {
   window.__calls = []; window.__chunks = {}; let pending = 1;
@@ -24,7 +24,7 @@ const init = () => {
   console.log('shared image opened at startup; file name:', await page.evaluate(() => window.imagefix.editor.fileName));
   console.log('screen:', await page.evaluate(() => window.imagefix.screen));
   await h.shot('b1_shared_open');
-  await page.click('[data-tool=adjust]'); await waitIdle(page, 200);
+  await selTool(page, 'adjust'); await waitIdle(page, 200);
   await page.evaluate(() => { const s = document.querySelector('.sheet .slider'); s.value = 25; s.dispatchEvent(new Event('input', { bubbles: true })); s.dispatchEvent(new Event('change', { bubbles: true })); });
   await waitIdle(page, 300);
   await page.click('.topbar .btn.filled'); await page.waitForTimeout(300);

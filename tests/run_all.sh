@@ -7,6 +7,7 @@ fail=0
 run() { echo "== $*"; "$@" || { echo "!! 실패: $*"; fail=1; }; }
 run node web/tests/unit.mjs
 run node web/tests/ai.unit.mjs
+run node web/tests/tools.unit.mjs
 run tests/jvm/run.sh
 (cd web && node build.mjs)
 cd tests/e2e
@@ -17,6 +18,9 @@ run node draft.cjs
 run node collage.cjs
 run node resize.cjs
 run node history.cjs
+run node groups.cjs
+run node sheet_resize.cjs
+run node crop_guide.cjs
 run node ai.cjs
 run node ai_free.cjs
 run node ai_gen.cjs

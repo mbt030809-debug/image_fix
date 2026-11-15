@@ -1,6 +1,6 @@
 // 작업 기록: 여러 번 편집 후 기록 탭에서 임의 시점으로 이동, 다시 실행 복구 확인
 const path = require('path');
-const { launch, close, openPhoto, waitIdle } = require('./lib.cjs');
+const { launch, close, openPhoto, waitIdle, selTool } = require('./lib.cjs');
 const FIX = path.resolve(__dirname, '../fixtures');
 
 (async () => {
@@ -10,14 +10,14 @@ const FIX = path.resolve(__dirname, '../fixtures');
   const check = (name, ok, extra = '') => { console.log((ok ? '  ✓ ' : '  ✗ ') + name + (extra ? ' ' + extra : '')); if (!ok) bad++; };
   await openPhoto(page, path.join(FIX, 'landscape.jpg'));
   const slider = async (v) => page.evaluate((v) => { const s = document.querySelector('.sheet .slider'); s.value = v; s.dispatchEvent(new Event('input', { bubbles: true })); s.dispatchEvent(new Event('change', { bubbles: true })); }, v);
-  await page.click('[data-tool=adjust]'); await waitIdle(page, 200);
+  await selTool(page, 'adjust'); await waitIdle(page, 200);
   await slider(20); await waitIdle(page, 200);
   await page.click('.chip >> text=대비'); await slider(30); await waitIdle(page, 200);
-  await page.click('[data-tool=filter]'); await waitIdle(page, 400);
+  await selTool(page, 'filter'); await waitIdle(page, 400);
   await page.click('.thumb[data-id=film]'); await waitIdle(page, 300);
   const n = await page.evaluate(() => window.imagefix.editor.store.history().length);
   check('history has entries', n >= 4, 'n=' + n);
-  await page.click('[data-tool=layers]'); await waitIdle(page, 200);
+  await selTool(page, 'layers'); await waitIdle(page, 200);
   await page.click('.seg button >> text=작업 기록');
   const rows = await page.locator('.sheet .layer-row').count();
   check('history rows listed', rows === n, rows + ' vs ' + n);

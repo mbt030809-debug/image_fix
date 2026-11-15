@@ -1,11 +1,11 @@
 const path = require('path'); const fs = require('fs');
-const { launch, close, openPhoto, waitIdle, OUT, DATE } = require('./lib.cjs');
+const { launch, close, openPhoto, waitIdle, OUT, DATE, selTool } = require('./lib.cjs');
 const FIX = path.resolve(__dirname, '../fixtures');
 (async () => {
   const h = await launch({ w: 412, h: 915, dpr: 2 });
   const { page } = h;
   await openPhoto(page, path.join(FIX, 'portrait.jpg'));
-  await page.click('[data-tool=retouch]'); await waitIdle(page, 400);
+  await selTool(page, 'retouch'); await waitIdle(page, 400);
   // 확대해서 정밀하게 (줌 칩 2번)
   await page.click('.zoomchip'); await page.waitForTimeout(400);
   const crop = async (name, nx, ny, size = 220) => {

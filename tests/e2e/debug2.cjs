@@ -1,11 +1,11 @@
 const path = require('path');
-const { launch, close, openPhoto, waitIdle } = require('./lib.cjs');
+const { launch, close, openPhoto, waitIdle, selTool } = require('./lib.cjs');
 const FIX = path.resolve(__dirname, '../fixtures');
 (async () => {
   const h = await launch();
   const { page } = h;
   await openPhoto(page, path.join(FIX, 'landscape.jpg'));
-  await page.click('[data-tool=curves]'); await waitIdle(page, 500);
+  await selTool(page, 'curves'); await waitIdle(page, 500);
   const b = await page.locator('.curve canvas').boundingBox();
   console.log('curve box', JSON.stringify(b));
   const cur = () => page.evaluate(() => JSON.stringify(window.imagefix.editor.doc().adj.curves));

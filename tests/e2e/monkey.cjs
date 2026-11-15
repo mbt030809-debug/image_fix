@@ -22,9 +22,22 @@ const SKIP = /LUT|사진 추가|사진 교체|사진에서 색|스포이트|직�
       let desc = '';
       const stage = await page.locator('.screen:not([hidden]) .stage').first().boundingBox();
       if (r < 0.14) {
-        const id = pick(await page.$$eval('.strip .tool', (els) => els.map((e) => e.dataset.tool)));
-        desc = 'tool ' + id;
-        await page.click('[data-tool=' + id + ']', { timeout: 3000 });
+        // 하단 줄 = 상위 목록(분류): 분류를 누르고, 80% 는 하위 목록의 도구까지 누른다
+        const gid = pick(await page.$$eval('.strip [data-group]', (els) => els.map((e) => e.dataset.group)));
+        desc = 'tool group ' + gid;
+        await page.click('.strip [data-group=' + gid + ']', { timeout: 3000 });
+        if (gid !== 'layers' && rnd() < 0.8) {
+          const subs = await page.$$eval('.subrow:not([hidden]) [data-tool]', (els) => els.map((e) => e.dataset.tool));
+          if (subs.length) { const id = pick(subs); desc += ' > ' + id; await page.click('.subrow [data-tool=' + id + ']', { timeout: 3000 }); }
+        }
+      } else if (r < 0.17) {
+        // 패널 손잡이를 잡고 위/아래로 끌기(높이 조절)
+        const gb = await page.locator('.editor.ed .sheet:not([hidden]) .sheet-grab').first().boundingBox().catch(() => null);
+        if (gb) {
+          desc = 'sheet drag';
+          const x = gb.x + gb.width / 2, y = gb.y + gb.height / 2, dy = (rnd() - 0.5) * 420;
+          await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x, y + dy / 2, { steps: 3 }); await page.mouse.move(x, y + dy, { steps: 3 }); await page.mouse.up();
+        }
       } else if (r < 0.55) {
         const btns = await page.$$('.sheet:not([hidden]) button:visible, .sheet:not([hidden]) .chip:visible, .sheet:not([hidden]) .thumb:visible, .sheet:not([hidden]) .gbtn:visible');
         if (btns.length) {
@@ -72,7 +85,7 @@ const SKIP = /LUT|사진 추가|사진 교체|사진에서 색|스포이트|직�
     } catch (e) { log.push('ERR ' + String(e.message).split('\n')[0].slice(0, 80)); }
   }
   await page.waitForFunction(() => !window.imagefix.editor.busy, null, { timeout: 60000 });
-  console.log('seed ' + seed + ': steps=' + steps + ' tools=' + log.filter((l) => l.startsWith('tool')).length + ' errors=' + h.errors.length);
+  console.log('seed ' + seed + ': steps=' + steps + ' tools=' + log.filter((l) => l.startsWith('tool')).length + ' drags=' + log.filter((l) => l.startsWith('sheet')).length + ' errors=' + h.errors.length);
   const soft = log.filter((l) => l.startsWith('ERR'));
   if (soft.length) console.log('  soft failures (test-side):', soft.length, soft.slice(0, 5).join(' | '));
   if (h.errors.length) console.log(h.errors.slice(0, 15).join('\n'));

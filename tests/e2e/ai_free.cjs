@@ -1,7 +1,7 @@
 // 무료 AI 제공자 E2E: OpenRouter(무료 이미지 모델 자동 탐색) · Cloudflare Workers AI(FLUX.2, 하루 무료)
 // 마스크가 없는 모델이라 "표시 이미지(편집할 곳을 마젠타로 칠한 사본)"를 함께 보내고, 결과는 선택 안쪽에만 합성되는지 확인한다.
 const path = require('path');
-const { launch, close, waitIdle } = require('./lib.cjs');
+const { launch, close, waitIdle, selTool } = require('./lib.cjs');
 const { init, installRoute, helpers } = require('./ai_lib.cjs');
 const FIX = path.resolve(__dirname, '../fixtures');
 
@@ -28,7 +28,7 @@ let HH = null;
   };
   const closeModal = async () => { await page.click('.msheet [aria-label="닫기"]'); await page.waitForTimeout(150); };
 
-  await page.click('[data-tool=ai]'); await waitIdle(page, 300);
+  await selTool(page, 'ai'); await waitIdle(page, 300);
   const before = { center: await px(0.51, 0.49), corner: await px(0.1, 0.1) };
   await lasso();
   await askTab();
