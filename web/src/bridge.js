@@ -110,6 +110,8 @@ export const bridge = {
     /** key 가 빈 문자열이면 키는 유지하고 서버 주소(openai)/부가 값(cloudflare 계정 ID)만 바꾼다. 성공 true, 실패 시 사유 문자열 */
     setKey(provider, key, base, extra) { const r = A.aiSetKey(provider, key || '', base || '', extra || ''); return r === 'OK' ? true : String(r || 'ERR:unknown'); },
     clearKey(provider) { A.aiClearKey(provider); },
+    /** 키 보관(암호화) 방식 점검 결과 "hw=ok sw=ok" (없으면 ''). 키 값은 쓰지 않는다 */
+    selfTest() { try { return A && A.aiSelfTest ? String(A.aiSelfTest() || '') : ''; } catch (e) { return ''; } },
     begin(spec) { const id = A.aiBegin(JSON.stringify(spec)); if (!id || String(id).startsWith('ERR:')) throw new Error(id || 'ERR:begin'); return String(id); },
     chunk(id, b64) { return !!A.aiChunk(id, b64); },
     send(id) { return !!A.aiSend(id); },

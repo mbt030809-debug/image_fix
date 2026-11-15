@@ -53,6 +53,11 @@ final class AiClient {
 
         /** 제공자별 부가 값 (cloudflare: 계정 ID). 없으면 빈 문자열 */
         String extra(String provider);
+
+        /** 키가 저장돼 있는데 풀어 읽을 수 없나(보안 저장소 초기화·고장). 이 경우 "키 없음"이 아니라 "다시 저장" 안내가 나가야 한다 */
+        default boolean keyUnreadable(String provider) {
+            return false;
+        }
     }
 
     static final int UPLOADING = 0, RUNNING = 1, DONE = 2, ERROR = 3, CANCELLED = 4;
@@ -378,7 +383,8 @@ final class AiClient {
                 return;
             }
             if (key == null || key.length() == 0) {
-                fail(j, 401, "no_key", "", "no api key");
+                if (cfg.keyUnreadable(j.provider)) fail(j, 401, "key_unreadable", "", "stored api key cannot be decrypted");
+                else fail(j, 401, "no_key", "", "no api key");
                 return;
             }
             String path = j.path;

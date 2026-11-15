@@ -660,6 +660,12 @@ public class MainActivity extends Activity {
             vault.clear(provider);
         }
 
+        /** 문제 해결용: 키 보관(암호화) 방식 점검. 예) "hw=ok sw=ok". 키 값은 다루지 않는다 */
+        @JavascriptInterface
+        public String aiSelfTest() {
+            return vault.selfTest();
+        }
+
         @JavascriptInterface
         public String aiBegin(String spec) {
             return ai.begin(spec);

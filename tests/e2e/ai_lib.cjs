@@ -10,10 +10,10 @@ const init = () => {
   let started = null;
   try { started = sessionStorage.getItem('t_started'); sessionStorage.setItem('t_started', '1'); } catch (e) { /* noop */ }
   let pending = started ? 0 : 1;
-  const prov = { openai: { key: null, base: 'https://api.openai.com/v1', hint: '', extra: '' }, openrouter: { key: null, base: 'https://openrouter.ai/api/v1', hint: '', extra: '' }, cloudflare: { key: null, base: 'https://api.cloudflare.com/client/v4', hint: '', extra: '' } };
+  const prov = { openai: { key: null, base: 'https://api.openai.com/v1', hint: '', extra: '', prot: 'hw', unreadable: false }, openrouter: { key: null, base: 'https://openrouter.ai/api/v1', hint: '', extra: '', prot: 'hw', unreadable: false }, cloudflare: { key: null, base: 'https://api.cloudflare.com/client/v4', hint: '', extra: '', prot: 'hw', unreadable: false } };
   const orModel = (id, created, free, edit) => ({ id, name: id, created, architecture: { input_modalities: edit ? ['image', 'text'] : ['text'], output_modalities: ['image', 'text'] }, pricing: free ? { prompt: '0', completion: '0', image: '0', request: '0' } : { prompt: '0.0000003', completion: '0.0000025', image: '0.001', request: '0' } });
   const S = window.__ai = {
-    log: [], specs: [], mode: 'ok', tr: 'ok', jobs: {}, results: {}, delay: 600, setKeyCalls: [], cfBinary: false,
+    log: [], specs: [], mode: 'ok', tr: 'ok', jobs: {}, results: {}, delay: 600, setKeyCalls: [], cfBinary: false, keyMode: 'ok', selfTest: 'hw=ok sw=ok', prov,
     modelIds: ['gpt-4o', 'gpt-image-1', 'gpt-image-1.5', 'gpt-image-1-mini'],
     orModels: [orModel('paid/nano-banana', 500, false, true), orModel('x-ai/grok-imagine-free:free', 300, true, true), orModel('free/text-to-image-only:free', 400, true, false), orModel('old/flux-edit:free', 100, true, true), orModel('some/text-model', 50, true, false)],
     cfModels: ['@cf/black-forest-labs/flux-2-klein-4b', '@cf/black-forest-labs/flux-2-dev', '@cf/meta/llama-3.1-8b-instruct'],
@@ -140,18 +140,20 @@ const init = () => {
     deviceInfo: () => JSON.stringify({ sdk: 34, memMB: 6000, camera: true, model: 'Fake' }),
     pendingCount: () => pending, clearPending: () => { pending = 0; },
     pickImages: () => { pending = 1; setTimeout(() => window.__nativeImages && window.__nativeImages(), 30); }, takePhoto: () => {}, setBars: () => {}, toast: () => {}, haptic: () => {}, keepScreenOn: () => {}, exit: () => {},
-    aiInfo: () => JSON.stringify({ v: 2, providers: Object.fromEntries(Object.entries(prov).map(([k, v]) => [k, { hasKey: !!v.key, hint: v.hint, base: v.base, extra: v.extra }])) }),
+    aiInfo: () => JSON.stringify({ v: 2, providers: Object.fromEntries(Object.entries(prov).map(([k, v]) => [k, { hasKey: !!v.key, hint: v.hint, base: v.base, extra: v.extra, readable: !v.unreadable, prot: v.key ? v.prot : '' }])) }),
     aiSetKey: (provider, k, b, extra) => {
       S.setKeyCalls.push([provider, k ? 'key' : '', b, extra]);
       const P = prov[provider]; if (!P) return 'ERR:provider';
       if (provider === 'openai' && b && !/^https:\/\//.test(b)) return 'ERR:badbase';
       if (provider === 'cloudflare' && extra && !/^[0-9a-f]{32}$/i.test(extra)) return 'ERR:badextra';
-      if (k) { if (provider === 'cloudflare' && !extra && !P.extra) return 'ERR:badextra'; P.key = k; P.hint = k.slice(0, 3) + '…' + k.slice(-4); } else if (!P.key) return 'ERR:badkey';
+      if (k && S.keyMode === 'store') return 'ERR:store:hw:KeyStoreException/sw:IOException';
+      if (k) { if (provider === 'cloudflare' && !extra && !P.extra) return 'ERR:badextra'; P.key = k; P.hint = k.slice(0, 3) + '…' + k.slice(-4); P.prot = S.keyMode === 'sw' ? 'sw' : 'hw'; P.unreadable = S.keyMode === 'unreadable'; } else if (!P.key) return 'ERR:badkey';
       if (provider === 'openai' && b) P.base = b;
       if (provider === 'cloudflare' && extra) P.extra = extra.toLowerCase();
       return 'OK';
     },
-    aiClearKey: (provider) => { if (prov[provider]) { prov[provider].key = null; prov[provider].hint = ''; if (provider === 'cloudflare') prov[provider].extra = ''; } },
+    aiClearKey: (provider) => { if (prov[provider]) { prov[provider].key = null; prov[provider].hint = ''; prov[provider].unreadable = false; if (provider === 'cloudflare') prov[provider].extra = ''; } },
+    aiSelfTest: () => S.selfTest,
     aiBegin: (spec) => {
       let s; try { s = JSON.parse(spec); } catch (e) { return 'ERR:spec'; }
       const rs = ROUTES[s.provider || 'openai']; if (!rs) return 'ERR:provider';
@@ -167,6 +169,7 @@ const init = () => {
       const j = S.jobs[id], pr = prov[j.spec.provider || 'openai'];
       j.state = 'running';
       if (!pr.key) { fail(j, 401, 'no_key', 'no api key'); return true; }
+      if (pr.unreadable) { fail(j, 401, 'key_unreadable', 'stored api key cannot be decrypted'); return true; }
       if (String(j.spec.path).includes('{account}') && !pr.extra) { fail(j, 0, 'no_account', 'account id is missing'); return true; }
       run(id).catch((e) => { fail(j, 0, 'bad_response', String(e)); });
       return true;

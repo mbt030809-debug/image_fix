@@ -8,7 +8,7 @@ import {
 } from '../src/ai/plan.js';
 import { pickBestImageModel, listImageModels, wrapPrompt, buildMultipart, buildEditRequest, explainError, cleanKey } from '../src/ai/openai.js';
 import {
-  PROVIDERS, PROVIDER_IDS, SIZES_FREE, SIZES_CF, CF_MODELS, CF_GENERATE_MODELS, CF_MODEL_RE, isCfGenerateModel, modelProfile, hasHangul, translateToEnglish, blobToBase64, base64ToBlob, dataUrlToBlob, sniffType, instruct,
+  PROVIDERS, PROVIDER_IDS, SIZES_FREE, SIZES_CF, CF_MODELS, CF_GENERATE_MODELS, CF_MODEL_RE, isCfGenerateModel, modelProfile, hasHangul, translateToEnglish, parseAccountId, blobToBase64, base64ToBlob, dataUrlToBlob, sniffType, instruct,
   extractOpenRouterImages, parseOpenRouterModels, pickFreeImageModel, orderOpenRouterModels, parseCfModels, parseCloudflareImage,
 } from '../src/ai/providers.js';
 import { AiError } from '../src/ai/client.js';
@@ -242,6 +242,25 @@ section('openai: errors / key');
   ok(o.key === 'other' && /400/.test(o.text) && /Invalid size/.test(o.text), 'other keeps status + message');
   ok(explainError(null).key === 'offline', 'null error does not throw');
   ok(cleanKey(' sk-proj-abc123 \n') === 'sk-proj-abc123' && cleanKey('short') === '' && cleanKey('한글키한글키한글키한글키') === '' && cleanKey('a'.repeat(500)) === '', 'cleanKey');
+  // 붙여넣기 정리: Bearer 접두사·따옴표·쉼표·보이지 않는 문자
+  ok(cleanKey('Bearer sk-or-v1-abcdef123456') === 'sk-or-v1-abcdef123456' && cleanKey('  bearer   sk-or-v1-abcdef123456  ') === 'sk-or-v1-abcdef123456', 'cleanKey: "Bearer " prefix');
+  ok(cleanKey('Authorization: Bearer cfut_abcdef123456') === 'cfut_abcdef123456' && cleanKey('authorization:bearer cfut_abcdef123456') === 'cfut_abcdef123456', 'cleanKey: whole header pasted');
+  ok(cleanKey('"sk-proj-abc123"') === 'sk-proj-abc123' && cleanKey('\u201csk-proj-abc123\u201d,') === 'sk-proj-abc123' && cleanKey("'sk-proj-abc123';") === 'sk-proj-abc123', 'cleanKey: quotes / trailing comma');
+  ok(cleanKey('sk-proj-\u200babc\u200d123\ufeff') === 'sk-proj-abc123' && cleanKey('sk-proj-abc\n123') === 'sk-proj-abc123', 'cleanKey: zero-width characters and inner line breaks');
+  ok(cleanKey('Bearersk-proj-abc123') === 'Bearersk-proj-abc123', 'cleanKey: only strips "Bearer" followed by whitespace (a key may start with those letters)');
+  ok(cleanKey('sk-…abcd') === '' && cleanKey('') === '' && cleanKey(null) === '' && cleanKey(undefined) === '', 'cleanKey: ellipsis / empty / null');
+  ok(k({ status: 401, code: 'key_unreadable' }) === 'keyread' && explainError({ status: 401, code: 'key_unreadable' }).settings && k({ status: 401, code: 'no_key' }) === 'key', 'unreadable stored key → "save the key again", distinct from "no key"');
+}
+
+section('cloudflare account ID: pasted text');
+{
+  const ACC = '0123456789abcdef0123456789abcdef';
+  ok(parseAccountId(ACC) === ACC && parseAccountId('  ' + ACC.toUpperCase() + '\n') === ACC, 'plain / upper-case / padded');
+  ok(parseAccountId('https://dash.cloudflare.com/' + ACC + '/home') === ACC && parseAccountId('https://dash.cloudflare.com/' + ACC) === ACC, 'dashboard URL');
+  ok(parseAccountId('Account ID: ' + ACC) === ACC && parseAccountId('계정 ID: ' + ACC + ' (복사됨)') === ACC, 'label around it');
+  ok(parseAccountId('1234') === '' && parseAccountId('') === '' && parseAccountId(null) === '' && parseAccountId('xyz'.repeat(20)) === '', 'rejects short / empty / non-hex');
+  ok(parseAccountId(ACC + 'a') === '' && parseAccountId('b' + ACC) === '' && parseAccountId(ACC + ACC) === '', 'a longer hex run is not an account ID');
+  ok(PROVIDERS.cloudflare.extra.check(ACC) && PROVIDERS.cloudflare.extra.check('see ' + ACC) && !PROVIDERS.cloudflare.extra.check('1234') && PROVIDERS.cloudflare.extra.parse === parseAccountId, 'provider extra.check/parse use it');
 }
 
 section('providers: binary helpers');

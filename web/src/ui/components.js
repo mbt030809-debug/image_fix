@@ -161,7 +161,8 @@ export function toast(msg, opts = {}) {
   if (snackEl) { snackEl.remove(); clearTimeout(snackTimer); }
   const kids = [h('span', { style: { padding: '12px 0', flex: '1' } }, msg)];
   if (opts.action) kids.push(Btn(opts.action.label, 'text', () => { hide(); opts.action.onClick && opts.action.onClick(); }));
-  snackEl = h('div', { class: 'snackbar', role: 'status', 'aria-live': 'polite' }, ...kids);
+  // 모달/대화상자(.scrim)가 열려 있으면 그 위(위쪽)에 띄운다 — 아래쪽은 시트에 가려 안내가 보이지 않았다
+  snackEl = h('div', { class: 'snackbar' + (document.querySelector('.scrim') ? ' top' : ''), role: 'status', 'aria-live': 'polite' }, ...kids);
   document.body.append(snackEl);
   const el = snackEl;
   function hide() { if (el.isConnected) el.remove(); if (snackEl === el) snackEl = null; }

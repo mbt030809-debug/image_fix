@@ -86,6 +86,7 @@ export function explainError(e) {
   if (code === 'offline' || code === 'network' || (status === 0 && !code)) return { key: 'offline', text: t('인터넷에 연결할 수 없어요. 연결을 확인한 뒤 다시 시도해 주세요.', "Can't reach the internet. Check your connection and try again.") };
   if (code === 'no_account') return { key: 'account', settings: true, text: t('Cloudflare 계정 ID가 필요해요. 설정에서 계정 ID를 입력해 주세요.', 'A Cloudflare account ID is required. Enter it in settings.') };
   if (code === 'no_key') return { key: 'key', settings: true, text: t('API 키를 먼저 설정해 주세요.', 'Set an API key first.') };
+  if (code === 'key_unreadable') return { key: 'keyread', settings: true, text: t('저장된 키를 읽지 못했어요(기기 보안 저장소 문제). 설정에서 키를 다시 저장해 주세요.', "Couldn't read the stored key (device secure storage problem). Save the key again in settings.") };
   if (code === 'no_free_model') return { key: 'nofree', settings: true, text: t('지금 쓸 수 있는 무료 이미지 편집 모델을 찾지 못했어요. 설정에서 다른 모델을 고르거나 다른 제공자(Cloudflare 등)를 써 보세요.', "Couldn't find a free image-editing model right now. Pick another model in settings or try another provider (e.g. Cloudflare).") };
   if (code === 'no_image') return { key: 'noimage', text: t('모델이 이미지를 돌려주지 않았어요. 다른 문구로 다시 시도하거나 설정에서 다른 모델을 골라 보세요.', 'The model returned no image. Try different wording or pick another model in settings.') + (raw ? ` (${raw})` : '') };
   if (/moderation|content_policy|safety|flagged/i.test(both)) return { key: 'policy', text: t('AI가 안전 정책 때문에 요청을 거부했어요. 문구나 선택 영역을 바꿔 보세요.', 'The AI declined this request under its safety policy. Change the wording or the area.') };
@@ -104,8 +105,13 @@ export function explainError(e) {
   return { key: 'other', text: t('AI 요청에 실패했어요', 'AI request failed') + (raw ? ` (${status || code}: ${raw})` : status ? ` (${status})` : '') };
 }
 
-/** 키 문자열 가벼운 검증 (공백 제거). 형식을 강제하지는 않는다(호환 서버 키 허용) */
+/**
+ * 붙여넣은 키 정리: "Bearer xxx"/"Authorization: Bearer xxx" 통째로, 공백·줄바꿈·보이지 않는 문자, 앞뒤 따옴표·쉼표를 걷어 낸다.
+ * 형식을 강제하지는 않는다(호환 서버 키 허용) — 보이는 ASCII 8~400자만 확인. 아니면 ''
+ */
 export function cleanKey(s) {
-  const k = String(s || '').replace(/\s+/g, '');
+  let k = String(s || '').replace(/^\s*(?:authorization\s*:\s*)?bearer\s+/i, '');
+  k = k.replace(/[\s\u200b-\u200f\u2028\u2029\u2060\ufeff]+/g, '');
+  k = k.replace(/^["'`\u201c\u201d\u2018\u2019]+|["'`\u201c\u201d\u2018\u2019,;]+$/g, '');
   return k.length >= 8 && k.length <= 400 && /^[\x21-\x7e]+$/.test(k) ? k : '';
 }

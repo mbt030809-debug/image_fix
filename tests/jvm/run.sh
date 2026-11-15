@@ -8,6 +8,11 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 javac -Xlint:-options -encoding UTF-8 -cp "$TOOLS/android.jar" -d "$OUT" \
   "$ROOT/app/src/main/java/app/imagefix/editor/AiClient.java" \
   "$ROOT/app/src/main/java/app/imagefix/editor/KeyVault.java" \
-  "$ROOT/tests/jvm/app/imagefix/editor/AiClientTest.java" 2>&1 | grep -v 'Picked up' || true
+  "$ROOT/tests/jvm/app/imagefix/editor/AiClientTest.java" \
+  "$ROOT/tests/jvm/app/imagefix/editor/KeyVaultTest.java" 2>&1 | grep -v 'Picked up' || true
+rc=0
 java -cp "$OUT:$TOOLS/android.jar" app.imagefix.editor.AiClientTest 2>&1 | grep -v 'Picked up'
-exit "${PIPESTATUS[0]}"
+[ "${PIPESTATUS[0]}" = 0 ] || rc=1
+java -cp "$OUT:$TOOLS/android.jar" app.imagefix.editor.KeyVaultTest 2>&1 | grep -v 'Picked up'
+[ "${PIPESTATUS[0]}" = 0 ] || rc=1
+exit $rc

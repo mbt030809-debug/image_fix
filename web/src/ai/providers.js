@@ -105,6 +105,12 @@ export function orderOpenRouterModels(list) {
 }
 
 // ------------------------------------------------------------ Cloudflare
+/** Cloudflare 계정 ID(32자리 16진수). 대시보드 주소·"Account ID: …" 처럼 앞뒤에 글자가 붙은 채 붙여넣어도 32자리를 찾아 돌려준다. 없으면 '' */
+export function parseAccountId(v) {
+  const m = /(?:^|[^0-9a-fA-F])([0-9a-fA-F]{32})(?![0-9a-fA-F])/.exec(String(v || ''));
+  return m ? m[1].toLowerCase() : '';
+}
+
 export const CF_MODELS = ['@cf/black-forest-labs/flux-2-klein-4b', '@cf/black-forest-labs/flux-2-klein-9b', '@cf/black-forest-labs/flux-2-dev'];
 export const CF_MODEL_RE = /^@cf\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
 
@@ -245,7 +251,7 @@ export const PROVIDERS = {
     host: () => 'api.cloudflare.com',
     privacy: (host) => t(`선택한 영역과 그 주변 이미지, 입력한 문구가 ${host}(Workers AI) 로 전송돼요. ${COMMON_PRIVACY()} 하루 무료 한도를 넘으면 요청이 거부돼요.`, `The selected area with its surroundings and your prompt are sent to ${host} (Workers AI). ${COMMON_PRIVACY()} Requests are refused once the daily free allowance is used up.`),
     defaultBase: 'https://api.cloudflare.com/client/v4', customBase: false,
-    extra: { id: 'account', label: () => t('계정 ID', 'Account ID'), placeholder: () => t('32자리 계정 ID', '32-character account ID'), check: (v) => /^[0-9a-fA-F]{32}$/.test(String(v || '').trim()) },
+    extra: { id: 'account', label: () => t('계정 ID', 'Account ID'), placeholder: () => t('32자리 계정 ID', '32-character account ID'), parse: parseAccountId, check: (v) => !!parseAccountId(v) },
     modelPresets: CF_MODELS.concat(CF_GENERATE_MODELS), fallbackModel: CF_MODELS[0], autoModel: CF_MODELS[0], generateModel: CF_GENERATE_MODELS[0],
     async discover(opts) {
       const { blob } = await relayRaw('cloudflare', { method: 'GET', path: '/accounts/{account}/ai/models/search?per_page=50&search=flux' }, opts);

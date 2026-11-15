@@ -2,7 +2,7 @@
 
 사진 보정·필터·자르기부터 텍스트·스티커·리터치·콜라주까지 한 앱에서. 기본은 **오프라인**으로 동작하고, 인터넷 권한은 선택 기능인 **AI 기능**(AI 수정 · AI로 이미지 만들기 — 내 API 키로 선택한 영역/문구만 전송, **무료 옵션 있음**)에만 쓰입니다. 쓰지 않으면 사진은 기기 밖으로 나가지 않습니다.
 
-- 빌드 날짜: 2026-11-15 · 버전 1.3.0 · Android 8.0(API 26) 이상, WebView 90+ (Play 스토어 자동 업데이트 기준 대부분 충족)
+- 빌드 날짜: 2026-11-15 · 버전 1.3.1 · Android 8.0(API 26) 이상, WebView 90+ (Play 스토어 자동 업데이트 기준 대부분 충족)
 - APK: [`release/ImageFix_2026-11-15.apk`](release/ImageFix_2026-11-15.apk)
 
 ![스크린샷](docs/screenshots_2026-11-15.jpg)
@@ -25,7 +25,7 @@
 | 곡선 | RGB/R/G/B 커브, 점 추가·이동·삭제, 숫자 입력·키보드 보정, 프리셋 |
 | 효과 | 블러(일반·모션·줌·틸트시프트·원형 초점), 모자이크·하프톤·유화·스케치·만화·엠보스·외곽선·포스터·솔라라이즈·듀오톤 등 아트, 글로우·소프트포커스·빛샘·빛망울·눈, 소용돌이·볼록/오목·물결·어안·거울·만화경, 글리치·색수차·RGB 분리·VHS (스택 방식) |
 | 리터치 | 치유, 복제, 지우기(주변 질감으로 채움), **픽셀 유동화**(밀기·확대·축소·비틀기 ↻↺·복원) |
-| AI 수정 | 올가미·브러시·사각형·원형으로 **영역 선택**(추가/빼기/반전/넓히기/부드럽게) → 그 영역(+주변)만 AI 에 요청 → **선택 안쪽에만** 합성되는 비파괴 레이어. **"문구로 채우기"**(사진 미전송, FLUX.1 schnell) 모드와 홈의 **"AI로 이미지 만들기"**(한국어→영어 자동 번역)도 있음. 제공자 3종: **Cloudflare Workers AI(하루 무료, FLUX.2)** · **OpenRouter(무료 `:free` 이미지 모델 자동 탐색)** · OpenAI(유료, 진짜 마스크 편집 `gpt-image`). 키는 기기 Keystore 에 암호화 저장, 첫 요청 전 동의. 자세한 내용: [`docs/AI_EDIT_2026-11-14.md`](docs/AI_EDIT_2026-11-14.md) · 무료 모델 조사: [`docs/FREE_IMAGE_MODELS_2026-11-15.md`](docs/FREE_IMAGE_MODELS_2026-11-15.md) |
+| AI 수정 | 올가미·브러시·사각형·원형으로 **영역 선택**(추가/빼기/반전/넓히기/부드럽게) → 그 영역(+주변)만 AI 에 요청 → **선택 안쪽에만** 합성되는 비파괴 레이어. **"문구로 채우기"**(사진 미전송, FLUX.1 schnell) 모드와 홈의 **"AI로 이미지 만들기"**(한국어→영어 자동 번역)도 있음. 제공자 3종: **Cloudflare Workers AI(하루 무료, FLUX.2)** · **OpenRouter(무료 `:free` 이미지 모델 자동 탐색)** · OpenAI(유료, 진짜 마스크 편집 `gpt-image`). 키는 기기 Keystore 에 암호화 저장(Keystore 를 못 쓰는 기기는 앱 전용 저장소에 암호화 — 설정에 표시), 첫 요청 전 동의. 자세한 내용: [`docs/AI_EDIT_2026-11-14.md`](docs/AI_EDIT_2026-11-14.md) · 무료 모델 조사: [`docs/FREE_IMAGE_MODELS_2026-11-15.md`](docs/FREE_IMAGE_MODELS_2026-11-15.md) |
 | 브러시 | 브러시/선형/원형/색 범위 마스크 + 노출·대비·채도·색온도·선명·흐림·스무딩. 프리셋: 피부 매끄럽게·치아 미백·눈 밝게·적목 제거·컬러 스플래시 |
 | 텍스트 | 글꼴 13종(번들 한글 3종: 블랙한산스·주아·손글씨 펜 + 영문 5종), 색·그라데이션·외곽선·그림자·배경 상자·정렬·자간/줄 간격·혼합 모드 |
 | 스티커 | 이모지, 도형 24종, 내 사진 합성(워터마크·이중 노출) |
@@ -58,14 +58,15 @@ Android Studio 로 열려면 저장소 루트를 프로젝트로 열면 됩니�
 ## 테스트
 ```bash
 node web/tests/unit.mjs                 # 엔진 247개 검증
-node web/tests/ai.unit.mjs              # AI 선택·요청 계획·제공자별 요청/응답/오류·생성 전용 모델·번역 190개 검증
-tests/jvm/run.sh                        # AiClient/KeyVault(제공자 프로필·허용 경로 포함)를 모의 HTTP 서버로 검증
+node web/tests/ai.unit.mjs              # AI 선택·요청 계획·제공자별 요청/응답/오류·생성 전용 모델·번역·키 입력 정리 203개 검증
+tests/jvm/run.sh                        # AiClient(제공자 프로필·허용 경로, 110개) + KeyVault(키 보관 3단계·복구, 55개) 검증
 node tests/e2e/smoke.cjs                # Playwright (헤드리스 크롬, 모바일 뷰포트)
 node tests/e2e/tools.cjs                # 모든 도구 순회 + 내보내기
 node tests/e2e/bridge.cjs               # 가짜 window.Android 로 네이티브 브리지 계약 검증
 node tests/e2e/ai.cjs                   # AI 수정 전 과정(OpenAI, 가짜 AI 릴레이)
 node tests/e2e/ai_free.cjs              # 무료 제공자(OpenRouter·Cloudflare) 흐름
 node tests/e2e/ai_gen.cjs               # 문구만으로 그리기(홈 이미지 만들기·문구로 채우기)
+node tests/e2e/ai_key.cjs               # API 키 입력 흐름(오류 안내 표시·입력 정리·저장 실패/대체 저장소/점검)
 node tests/e2e/monkey.cjs 1 150         # 무작위 조작(시드, 스텝)
 ```
 
