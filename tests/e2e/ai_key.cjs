@@ -1,6 +1,7 @@
 // API 키 입력 흐름 E2E (실기기 제보: "API 입력하면 오류남, 키가 사라짐")
 //  - 원인 1: 설정(모달) 위에서 토스트가 시트 뒤에 가려져 오류 안내가 보이지 않았다 → 이제 모달 위 + 입력 아래 고정 안내
 //  - 입력 정리(Bearer/따옴표/주소째 붙인 계정 ID), 바뀐 칸 안내, 저장 실패(원인 표시)·대체 저장소·읽을 수 없는 키·보관 기능 점검
+//  - 제공자: Cloudflare(계정 ID + 토큰) · ModelScope(토큰) · Pollinations(키 없음)
 const path = require('path');
 const { launch, close } = require('./lib.cjs');
 const { init } = require('./ai_lib.cjs');
@@ -36,10 +37,18 @@ const FIX = path.resolve(__dirname, '../fixtures');
     return { text: s.textContent, onTop: !!(top && top.closest && top.closest('.snackbar')), cls: s.className, y: Math.round(b.top), inView: b.top >= 0 && b.bottom <= innerHeight };
   });
 
-  // 설정 열기: 홈 → "AI로 이미지 만들기" → 키 설정
+  // 설정 열기: 홈 → "AI로 이미지 만들기" → Cloudflare 탭 → 키 설정
   await page.click('.home .tile >> text=AI로 이미지 만들기'); await page.waitForTimeout(250);
+  await page.click('.msheet .chip[data-id=cloudflare]'); await page.waitForTimeout(150);
   await page.click('.msheet .ai-setup .btn'); await page.waitForTimeout(300);
   check('AI settings opens on Cloudflare (account ID + token)', (await acctField().count()) === 1 && (await keyField().count()) === 1);
+  // 제공자별 칸: Pollinations 는 키 없음 / ModelScope 는 토큰만
+  await M().locator('.chip[data-id=pollinations]').click(); await page.waitForTimeout(120);
+  check('Pollinations needs no key: no key field, no troubleshooting block, no connection test', (await kv()) === '필요 없음' && (await keyField().count()) === 0 && (await acctField().count()) === 0 && (await M().locator('details.ai-adv').count()) === 0 && (await M().locator('.btn', { hasText: '연결 테스트' }).count()) === 0);
+  await M().locator('.chip[data-id=modelscope]').click(); await page.waitForTimeout(120);
+  check('ModelScope asks for the token only', (await keyField().count()) === 1 && (await acctField().count()) === 0 && (await keyField().getAttribute('placeholder')) === 'ModelScope 액세스 토큰');
+  await M().locator('.chip[data-id=cloudflare]').click(); await page.waitForTimeout(120);
+  check('back on Cloudflare: account ID + token again', (await acctField().count()) === 1 && (await keyField().count()) === 1);
 
   // ---------------------------------------------------------------- 1) 오류 안내가 눈에 보인다
   console.log('▶ 오류 안내가 보인다(토스트 + 입력 아래 고정 안내)');
@@ -81,7 +90,7 @@ const FIX = path.resolve(__dirname, '../fixtures');
   await acctField().fill('https://dash.cloudflare.com/' + ACC.toUpperCase() + '/workers/overview');
   await keyField().fill('  Authorization: Bearer "cf-token-abcdef123456"  \n');
   await press();
-  check('saved natively with the cleaned token and the 32-character account ID', JSON.stringify(await lastCall()) === JSON.stringify(['cloudflare', 'key', '', ACC]), JSON.stringify(await lastCall()));
+  check('saved natively with the cleaned token and the 32-character account ID', JSON.stringify(await lastCall()) === JSON.stringify(['cloudflare', 'key', ACC]), JSON.stringify(await lastCall()));
   check('hint is shown, the field was emptied', (await kv()).includes('3456') && (await keyField().inputValue()) === '');
   m = await msgs();
   check('inline success message', m.length === 1 && /키를 안전하게 저장했어요/.test(m[0]) && (await M().locator('.ai-keymsg.ok').count()) === 1, JSON.stringify(m));
@@ -92,13 +101,13 @@ const FIX = path.resolve(__dirname, '../fixtures');
 
   // ---------------------------------------------------------------- 3) 네이티브 저장 실패: 원인을 보여 준다
   console.log('▶ 저장 실패(Keystore): 원인 표시 · 입력 유지');
-  await M().locator('.chip[data-id=openai]').click(); await page.waitForTimeout(150);
+  await M().locator('.chip[data-id=modelscope]').click(); await page.waitForTimeout(150);
   await page.evaluate(() => { window.__ai.keyMode = 'store'; });
-  await keyField().fill('sk-proj-abcdef123456');
+  await keyField().fill('ms-abcdef123456');
   await press();
   m = await msgs();
   check('store failure shows the reason and where to look', m.length === 1 && /기기에 안전하게 저장하지 못했어요/.test(m[0]) && /KeyStoreException/.test(m[0]) && /문제 해결/.test(m[0]), JSON.stringify(m));
-  check('the typed key stays so the user can retry', (await keyField().inputValue()) === 'sk-proj-abcdef123456' && (await kv()) === '없음');
+  check('the typed key stays so the user can retry', (await keyField().inputValue()) === 'ms-abcdef123456' && (await kv()) === '없음');
   await h.shot('k3_store_failed');
 
   // 문제 해결: 보관 기능 점검
@@ -127,21 +136,21 @@ const FIX = path.resolve(__dirname, '../fixtures');
   check('with the fallback storage the save succeeds', (await kv()).includes('3456') && /키를 안전하게 저장했어요/.test((await msgs())[0]));
   check('the fallback is disclosed (lower protection)', /앱 전용 저장소에 암호화해 보관/.test(await M().textContent()));
   await page.evaluate(() => { window.__ai.keyMode = 'unreadable'; });
-  await keyField().fill('sk-proj-zzzzzz987654');
+  await keyField().fill('ms-zzzzzz987654');
   await press();
   m = await msgs();
   check('saved-but-unreadable is reported (never "saved")', m.some((x) => /저장했지만 다시 읽지 못했어요/.test(x)) && m.some((x) => /저장된 키를 읽을 수 없어요/.test(x)), JSON.stringify(m));
   check('key row says it is unreadable', (await kv()) === '읽을 수 없음');
   await page.evaluate(() => { window.__ai.keyMode = 'ok'; });
-  await keyField().fill('sk-proj-yyyyyy123456');
+  await keyField().fill('ms-yyyyyy123456');
   await press();
   m = await msgs();
   check('re-entering the key recovers', (await kv()).includes('3456') && m.length === 1 && /안전하게 저장했어요/.test(m[0]), JSON.stringify(m));
 
   // 닫았다가 다시 열어도 저장된 상태가 보인다
   await M().locator('[aria-label="닫기"]').click(); await page.waitForTimeout(250);
-  await page.waitForFunction(() => !!window.__ai.prov.openai.key);
-  check('the saved key survives closing the settings', await page.evaluate(() => !!window.__ai.prov.openai.key && !!window.__ai.prov.cloudflare.key));
+  await page.waitForFunction(() => !!window.__ai.prov.modelscope.key);
+  check('the saved keys survive closing the settings (each provider has its own slot; Pollinations has none)', await page.evaluate(() => !!window.__ai.prov.modelscope.key && !!window.__ai.prov.cloudflare.key && !window.__ai.prov.pollinations.key));
   check('no console errors', h.errors.length === 0, h.errors.slice(0, 3).join(' | '));
   await close(h);
   console.log(bad ? `\n✗ ${bad} check(s) failed` : '\n✓ ai_key all passed');

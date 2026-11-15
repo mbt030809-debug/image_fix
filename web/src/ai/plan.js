@@ -72,7 +72,7 @@ export function placeInCanvas(selFit, size, fit) {
   return out;
 }
 
-/** OpenAI 편집 마스크 RGBA: 편집할 곳 alpha=0(투명), 나머지 alpha=255. 모델이 경계를 자연스럽게 섞도록 dilatePx 만큼 넓힘 */
+/** 마스크 입력을 받는 편집 API 용 RGBA: 편집할 곳 alpha=0(투명), 나머지 alpha=255. 모델이 경계를 자연스럽게 섞도록 dilatePx 만큼 넓힘. (v1.5.0 부터 마스크를 쓰는 제공자는 없다 — OpenAI 삭제. 순수 함수라 유지) */
 export function apiMaskRGBA(selFull, size, dilatePx) {
   const g = dilatePx > 0 ? growMask(selFull, size.w, size.h, dilatePx) : selFull;
   const N = size.w * size.h;

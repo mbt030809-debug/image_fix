@@ -10,7 +10,7 @@
 - **번들 폰트 (SIL Open Font License 1.1)** — `web/public/fonts/<폰트>/LICENSE` 에 각 라이선스 원문 포함. @fontsource 패키지에서 woff2 만 복사.
   Black Han Sans(Zess Type), Jua(Woowa Brothers), Nanum Pen Script(Sandoll), Pacifico(Vernon Adams et al.), Bebas Neue(Dharma Type), Dancing Script(Impallari Type), Permanent Marker(Font Diner), Playfair Display(Claus Eggers Sørensen).
 - 그 외 앱 코드는 외부 라이브러리 없이 직접 작성한 바닐라 JS / Java 입니다. UI 는 기기 시스템 폰트를 쓰고, 웹 화면은 네트워크 리소스를 사용하지 않습니다.
-- **AI 수정(선택 기능)** 은 사용자가 입력한 API 키로 OpenAI Images API(또는 호환 서버) · OpenRouter · Cloudflare Workers AI 중 선택한 제공자를 호출합니다. 앱에 포함된 서비스가 아니며, 이용 약관·사용 정책·요금·무료 한도·데이터 사용 정책은 해당 제공자(그리고 OpenRouter 가 중계하는 모델 제공사) 정책을 따릅니다. 자세한 데이터 흐름은 `docs/AI_EDIT_2026-11-14.md` 참고.
+- **AI 기능(선택 기능, v1.5.0~)** 은 **Cloudflare Workers AI**(사용자의 API 토큰 + 계정 ID) · **Pollinations.ai**(키 없음) · **ModelScope API-Inference**(사용자의 액세스 토큰) 중 사용자가 고른 제공자를 호출합니다(OpenAI·OpenRouter 는 1.5.0 에서 삭제). 앱에 포함된 서비스가 아니며, 이용 약관·사용 정책·요금·무료 한도·데이터 사용 정책은 각 제공자(그리고 그 서비스가 쓰는 모델 제공사 — FLUX: Black Forest Labs, Qwen-Image: Alibaba 등)의 정책을 따릅니다. 이 앱이 만든 결과물의 권리·사용 조건도 해당 서비스·모델의 약관을 확인하세요. 자세한 데이터 흐름은 `docs/AI_EDIT_2026-11-14.md` 참고.
 
 ## 빌드 도구 (앱에 포함되지 않음)
 - esbuild (MIT) — 웹 번들
