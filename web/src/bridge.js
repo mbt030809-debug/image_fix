@@ -123,6 +123,16 @@ export const bridge = {
     cancel(id) { try { A.aiCancel(id); } catch (e) { /* noop */ } },
     release(id) { try { A.aiRelease(id); } catch (e) { /* noop */ } },
   },
+  /** 앱 업데이트(네이티브 Updater): GitHub 의 release/latest.json 확인 → APK 내려받기(SHA-256 확인) → PackageInstaller */
+  update: {
+    available() { return !!(A && A.updStatus); },
+    check() { try { A.updCheck(); } catch (e) { /* noop */ } },
+    download() { try { A.updDownload(); } catch (e) { /* noop */ } },
+    cancel() { try { A.updCancel(); } catch (e) { /* noop */ } },
+    install() { try { A.updInstall(); } catch (e) { /* noop */ } },
+    /** {state: idle|checking|none|available|downloading|ready|installing|needperm|error, versionName, versionCode, notes, size, done, total, current, err} */
+    status() { try { return JSON.parse(A.updStatus()); } catch (e) { return { state: 'error', err: 'bridge' }; } },
+  },
   setBars(hex, darkIcons) { if (A) A.setBars(hex, !!darkIcons); },
   toast(msg) { if (A) A.toast(msg); },
   haptic() { if (A) A.haptic(); },

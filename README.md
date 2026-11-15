@@ -2,14 +2,16 @@
 
 사진 보정·필터·자르기부터 텍스트·스티커·리터치·콜라주까지 한 앱에서. 기본은 **오프라인**으로 동작하고, 인터넷 권한은 선택 기능인 **AI 기능**(AI 수정 · AI로 이미지 만들기 — Cloudflare · ModelScope · Gemini · fal.ai, 내 키/토큰으로 선택한 영역/문구만 전송)에만 쓰입니다. 쓰지 않으면 사진은 기기 밖으로 나가지 않습니다.
 
-- 빌드 날짜: 2026-11-15 · 버전 1.7.1 · Android 8.0(API 26) 이상, WebView 90+ (Play 스토어 자동 업데이트 기준 대부분 충족)
+- 빌드 날짜: 2026-11-15 · 버전 1.8.0 · Android 8.0(API 26) 이상, WebView 90+ (Play 스토어 자동 업데이트 기준 대부분 충족)
 - APK: [`release/ImageFix_2026-11-15.apk`](release/ImageFix_2026-11-15.apk)
 
 ![스크린샷](docs/screenshots_2026-11-15.jpg)
 
 > 스크린샷의 사진은 **합성 샘플**이고, AI 화면(생성 결과·채워진 영역의 단색 이미지, 계정 ID·키 표시)은 **테스트용 모의 서버**로 만든 예시라 실제 AI 결과가 아닙니다. 여권 가이드 화면의 인물도 합성 샘플입니다.
 
-## 설치
+## 설치 · 업데이트
+- **앱 안에서 업데이트**(1.8.0~): 시작할 때(12시간에 한 번) GitHub 의 `release/latest.json` 을 읽어 새 버전이 있으면 알려 줘요. 설정 → **새 버전 확인** 으로도 확인하고, 설정에서 자동 확인을 끌 수 있어요. 확인은 공개 파일을 읽기만 하고 아무것도 보내지 않아요. 업데이트를 누르면 같은 저장소의 APK 를 내려받아 SHA-256 을 확인한 뒤 안드로이드 설치 화면으로 넘겨요(같은 서명키가 아니면 설치되지 않아요). 처음 한 번은 “이 출처의 앱 설치 허용”이 필요해요. 1.7.x 이하는 이 기능이 없어서 1.8.0 을 직접 설치해야 해요.
+- 새 버전을 낼 때: `./scripts/build_apk.sh` 가 APK 와 `release/latest.json` 을 만들어요 → 둘을 같이 커밋·푸시하면 앱이 새 버전을 알아봐요(`release/NOTES.txt` 가 안내 문구).
 1. 폰에서 APK 다운로드 → 열기 (“출처를 알 수 없는 앱 설치 허용” 필요)
 2. 개인용 서명키(`keystore/imagefix.jks`)로 서명돼 있어, 이후 버전은 같은 키로 만들면 덮어쓰기 설치됩니다.
 3. 갤러리/파일 앱의 **공유 · 편집 · 연결 앱** 목록에서도 ImageFix 가 나타납니다.
@@ -79,6 +81,7 @@ node tests/e2e/bridge.cjs               # 가짜 window.Android 로 네이티브
 node tests/e2e/ai.cjs                   # AI 수정 전 과정(Cloudflare 편집, 가짜 AI 릴레이)
 node tests/e2e/ai_providers.cjs         # Gemini·ModelScope 편집·fal.ai 마스크 흐름 + 옛 설정 정리
 node tests/e2e/ai_gen.cjs               # 문구만으로 그리기(홈 이미지 만들기: Cloudflare·Gemini, 문구로 채우기)
+node tests/e2e/update.cjs               # 앱 업데이트(확인·안내·내려받기·설치 허용·실패·자동 확인 끄기)
 node tests/e2e/ai_key.cjs               # API 키 입력 흐름(오류 안내 표시·입력 정리·저장 실패/대체 저장소/점검)
 node web/tests/tools.unit.mjs           # 도구 분류(상위/하위) 무결성 + 여권 가이드 계산
 node tests/e2e/groups.cjs               # 상위/하위 목록 동작(세로·가로·태블릿·320px·영어)

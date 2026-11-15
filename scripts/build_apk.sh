@@ -61,3 +61,13 @@ apksigner verify --verbose --print-certs "$OUT" 2>&1 | grep -v 'Picked up JAVA_T
 
 echo "[완료] $OUT ($(du -h "$OUT" | cut -f1))  versionName=$VERSION_NAME versionCode=$VERSION_CODE"
 sha256sum "$OUT" | cut -d' ' -f1 | sed 's/^/sha256: /'
+
+# 앱 안 업데이트 확인용 매니페스트(release/latest.json): 앱이 GitHub 의 이 파일을 읽어 새 버전을 알려 준다. APK 와 같이 커밋/푸시해야 한다.
+python3 - "$OUT" "$VERSION_CODE" "$VERSION_NAME" "$ROOT/release/NOTES.txt" > "$ROOT/release/latest.json" <<'PY'
+import sys, json, hashlib, os
+apk, code, name, nf = sys.argv[1:5]
+d = open(apk, 'rb').read()
+notes = open(nf, encoding='utf-8').read().strip() if os.path.exists(nf) else ''
+print(json.dumps({'versionCode': int(code), 'versionName': name, 'apk': 'release/' + os.path.basename(apk), 'sha256': hashlib.sha256(d).hexdigest(), 'size': len(d), 'notes': notes}, ensure_ascii=False, indent=2))
+PY
+echo "[매니페스트] release/latest.json (apk 와 함께 커밋·푸시)"

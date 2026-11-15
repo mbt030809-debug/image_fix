@@ -8,10 +8,11 @@ import { bridge } from './bridge.js';
 import * as Drafts from './drafts.js';
 import { toast, openModal, Segmented, Switch, Chips, Btn, Slider, handleBack, confirmDialog } from './ui/components.js';
 import { openAiSettings, aiConfig } from './tools/aisettings.js';
+import { checkManually } from './update.js';
 import { openGenerate } from './tools/aigenerate.js';
 
 const SETTINGS_KEY = 'imagefix.settings';
-const VERSION = '1.7.1';
+const VERSION = '1.8.0';
 
 async function decodeFile(file) {
   const opts = { imageOrientation: 'from-image', premultiplyAlpha: 'none', colorSpaceConversion: 'default' };
@@ -89,7 +90,7 @@ export class App {
       this.draftCard,
       h('section', { class: 'hero' }, h('h1', null, t('편집할 사진을 선택하세요', 'Choose a photo to edit')), h('p', null, t('자르기, 보정, 필터부터 텍스트·스티커·리터치까지. 편집은 이 기기 안에서 처리되고, AI 기능을 쓸 때만 선택한 영역(또는 입력한 문구)이 AI 서버로 가요.', 'Crop, adjust, filters, text, stickers and retouch. Editing runs on this device; only when you use AI features is the area you select (or your prompt) sent to an AI server.')), pick),
       h('div', { class: 'tiles' }, ...tiles),
-      h('p', { class: 'foot' }, t('기본은 오프라인 · 인터넷은 AI 기능을 쓸 때만, 필요한 부분(선택 영역·문구)만 사용해요', 'Offline by default · the internet is used only for AI features, and only for what you select or type')));
+      h('p', { class: 'foot' }, t('기본은 오프라인 · 인터넷은 AI 기능과 새 버전 확인에만, 필요한 부분(선택 영역·문구)만 사용해요', 'Offline by default · the internet is used only for AI features and update checks, and only for what you select or type')));
     const el = h('div', { class: 'screen home' }, wrap);
     return el;
   }
@@ -126,7 +127,7 @@ export class App {
       const motion = Switch({ label: t('움직임 줄이기', 'Reduce motion'), value: s.reduceMotion, onChange: (v) => { s.reduceMotion = v; this.saveSettings(); this.applyTheme(); } });
       const grid = Switch({ label: t('자르기 격자선', 'Crop grid'), value: s.grid !== false, onChange: (v) => { s.grid = v; this.saveSettings(); } });
       const stats = Switch({ label: t('처리 정보 표시', 'Show processing info'), value: s.showStats, onChange: (v) => { s.showStats = v; this.saveSettings(); this.editor.stats.hidden = !v; } });
-      body.append(h('div', { class: 'sheet-sec' }, t('언어', 'Language')), lang.el, h('div', { class: 'sheet-sec' }, t('테마', 'Theme')), theme.el,
+      body.append(...[h('div', { class: 'sheet-sec' }, t('언어', 'Language')), lang.el, h('div', { class: 'sheet-sec' }, t('테마', 'Theme')), theme.el,
         h('div', { class: 'sheet-sec' }, t('작업 해상도 (긴 변 px)', 'Working resolution (long side, px)')), res.el,
         h('p', { class: 'sheet-note' }, t('높을수록 선명하지만 메모리를 더 써요. 보통은 자동을 권장해요.', 'Higher is sharper but uses more memory. Auto is recommended.')),
         motion.el, grid.el, stats.el,
@@ -135,7 +136,10 @@ export class App {
         bridge.ai.available() ? Btn(t('AI 설정 (제공자·키·모델)', 'AI settings (provider · key · model)'), 'tonal', () => openAiSettings(this), 'key-round') : null,
         h('div', { class: 'sheet-sec' }, t('정보', 'About')),
         h('div', { class: 'kv' }, h('span', null, t('버전', 'Version')), h('b', null, VERSION)),
-        h('p', { class: 'sheet-note' }, t('아이콘: Lucide (ISC), 폰트: SIL OFL 1.1. 인터넷 권한은 AI 기능(AI 수정·이미지 만들기)에만 쓰여요. 쓰지 않으면 사진은 기기 밖으로 나가지 않아요.', 'Icons: Lucide (ISC), fonts: SIL OFL 1.1. The internet permission is used only by AI features (AI edit, Create with AI). If you never use them, your photos never leave the device.')));
+        bridge.update.available() ? Btn(t('새 버전 확인', 'Check for updates'), 'tonal', () => checkManually(), 'refresh-cw') : null,
+        bridge.update.available() ? Switch({ label: t('시작할 때 새 버전 알림 (GitHub 확인)', 'Check for updates at start (GitHub)'), value: s.autoUpdate !== false, onChange: (v) => { s.autoUpdate = v; this.saveSettings(); } }).el : null,
+        bridge.update.available() ? h('p', { class: 'sheet-note' }, t('확인은 GitHub 의 공개 파일(release/latest.json)을 읽기만 하고, 사진·문구 등 아무것도 보내지 않아요. 설치는 안드로이드의 설치 화면에서 한 번 더 확인해요.', 'Checking only reads a public GitHub file (release/latest.json); nothing is sent. Installing is confirmed once more on the Android install screen.')) : null,
+        h('p', { class: 'sheet-note' }, t('아이콘: Lucide (ISC), 폰트: SIL OFL 1.1. 인터넷 권한은 AI 기능(AI 수정·이미지 만들기)과 새 버전 확인에만 쓰여요. 쓰지 않으면 사진은 기기 밖으로 나가지 않아요.', 'Icons: Lucide (ISC), fonts: SIL OFL 1.1. The internet permission is used only by AI features (AI edit, Create with AI) and the update check. If you never use them, your photos never leave the device.'))].filter(Boolean));
     } });
   }
 

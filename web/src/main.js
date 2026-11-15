@@ -1,6 +1,7 @@
 import { App } from './app.js';
 import { toast } from './ui/components.js';
 import { t, initLang } from './i18n.js';
+import { autoCheck } from './update.js';
 
 function compatible() {
   return typeof createImageBitmap === 'function' && typeof Path2D !== 'undefined' && typeof ResizeObserver !== 'undefined' && typeof PointerEvent !== 'undefined' && typeof Element.prototype.replaceChildren === 'function' && typeof Promise !== 'undefined' && !!HTMLCanvasElement.prototype.toBlob;
@@ -23,5 +24,6 @@ function start() {
   window.addEventListener('unhandledrejection', (e) => report(e.reason));
   window.addEventListener('error', (e) => { if (e.message && !/ResizeObserver/.test(e.message)) report(e.error || e.message); });
   window.imagefix = new App(root);
+  setTimeout(() => autoCheck(window.imagefix), 4000); // 새 버전 확인(12시간에 한 번, 설정에서 끌 수 있음)
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();

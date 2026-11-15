@@ -125,6 +125,81 @@ public class MainActivity extends Activity {
         if (collect(intent) > 0) notifyNative();
     }
 
+    // ------------------------------------------------------------ 앱 업데이트(GitHub 의 release/latest.json → APK 내려받기 → PackageInstaller)
+    private final Object updLock = new Object();
+    private String updState = "idle"; // idle | checking | none | available | downloading | ready | installing | needperm | error
+    private Updater.Info updInfo;
+    private long updDone, updTotal;
+    private String updErr = "";
+    private boolean[] updCancel = new boolean[]{false};
+    private File updFile;
+
+    private int installedCode() {
+        try {
+            android.content.pm.PackageInfo p = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return Build.VERSION.SDK_INT >= 28 ? (int) p.getLongVersionCode() : p.versionCode;
+        } catch (Throwable e) {
+            return 0;
+        }
+    }
+
+    private void updSet(String st, String err) {
+        synchronized (updLock) {
+            updState = st;
+            updErr = err == null ? "" : err;
+        }
+    }
+
+    private String updJson() {
+        synchronized (updLock) {
+            try {
+                JSONObject o = new JSONObject().put("state", updState).put("err", updErr).put("done", updDone).put("total", updTotal).put("current", installedCode());
+                if (updInfo != null) o.put("versionName", updInfo.name).put("versionCode", updInfo.code).put("notes", updInfo.notes).put("size", updInfo.size);
+                return o.toString();
+            } catch (Throwable e) {
+                return "{\"state\":\"error\"}";
+            }
+        }
+    }
+
+    private void installApk(File f) {
+        if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+            updSet("needperm", "");
+            try {
+                startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
+            } catch (Throwable ignore) {
+                // 설정 화면을 못 열면 JS 가 안내문만 보여 준다
+            }
+            return;
+        }
+        try {
+            android.content.pm.PackageInstaller pi = getPackageManager().getPackageInstaller();
+            int id = pi.createSession(new android.content.pm.PackageInstaller.SessionParams(android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL));
+            android.content.pm.PackageInstaller.Session s = pi.openSession(id);
+            try {
+                java.io.InputStream in = new java.io.FileInputStream(f);
+                java.io.OutputStream out = s.openWrite("ImageFix", 0, f.length());
+                try {
+                    byte[] buf = new byte[65536];
+                    int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                    s.fsync(out);
+                } finally {
+                    out.close();
+                    in.close();
+                }
+                Intent ri = new Intent(this, UpdateReceiver.class).setAction("app.imagefix.editor.UPDATE_RESULT");
+                int fl = android.app.PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? android.app.PendingIntent.FLAG_MUTABLE : 0);
+                s.commit(android.app.PendingIntent.getBroadcast(this, id, ri, fl).getIntentSender());
+                updSet("installing", "");
+            } finally {
+                s.close();
+            }
+        } catch (Throwable e) {
+            updSet("error", "install:" + e.getClass().getSimpleName());
+        }
+    }
+
     /** 화면(앞)에 있나 / AI 작업이 진행 중인가(진행 중에는 WebView 를 멈추지 않아 백그라운드에서도 결과를 받는다) */
     private volatile boolean resumed = true, aiBusy = false;
     private boolean askedNotif = false;
@@ -971,6 +1046,94 @@ public class MainActivity extends Activity {
                     }
                 }
             });
+        }
+
+        /** 새 버전 확인(백그라운드 스레드). 결과는 updStatus() 로 */
+        @JavascriptInterface
+        public void updCheck() {
+            synchronized (updLock) {
+                if ("checking".equals(updState) || "downloading".equals(updState)) return;
+                updState = "checking";
+                updErr = "";
+            }
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        Updater.Info i = Updater.fetch();
+                        synchronized (updLock) {
+                            updInfo = i;
+                            updState = i.code > installedCode() ? "available" : "none";
+                        }
+                    } catch (Throwable e) {
+                        updSet("error", "check:" + String.valueOf(e.getMessage()));
+                    }
+                }
+            }, "imagefix-update-check").start();
+        }
+
+        /** 새 APK 내려받기(SHA-256 확인까지). 끝나면 state=ready */
+        @JavascriptInterface
+        public void updDownload() {
+            final Updater.Info i;
+            synchronized (updLock) {
+                if (!"available".equals(updState) && !"error".equals(updState) && !"ready".equals(updState) || updInfo == null) return;
+                i = updInfo;
+                updState = "downloading";
+                updErr = "";
+                updDone = 0;
+                updTotal = i.size;
+                updCancel = new boolean[]{false};
+            }
+            final boolean[] cancel = updCancel;
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        File f = Updater.download(i, new File(getCacheDir(), "update"), new Updater.Progress() {
+                            @Override
+                            public void on(long d, long t) {
+                                updDone = d;
+                                updTotal = t;
+                            }
+                        }, cancel);
+                        synchronized (updLock) {
+                            updFile = f;
+                            updState = "ready";
+                        }
+                    } catch (Throwable e) {
+                        updSet(cancel[0] ? "available" : "error", cancel[0] ? "" : "download:" + String.valueOf(e.getMessage()));
+                    }
+                }
+            }, "imagefix-update-download").start();
+        }
+
+        @JavascriptInterface
+        public void updCancel() {
+            synchronized (updLock) {
+                updCancel[0] = true;
+            }
+        }
+
+        /** 내려받은 APK 설치 시작(안드로이드의 설치 확인 화면이 뜬다) */
+        @JavascriptInterface
+        public void updInstall() {
+            final File f;
+            synchronized (updLock) {
+                f = updFile;
+                if (f == null || !f.isFile() || !("ready".equals(updState) || "needperm".equals(updState))) return;
+            }
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    installApk(f);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public String updStatus() {
+            return updJson();
         }
 
         /** AI 작업 시작/끝: 포그라운드 서비스(진행 중 알림)로 앱을 백그라운드에 보내도 이어지게 한다. 끝나면 멈췄던 WebView 를 멈춘다 */
