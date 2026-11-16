@@ -10,10 +10,12 @@ import { orientedSize } from '../engine/geometry.js';
 import { newMask, rasterPolygon, combine, strokeOp, invertMask, bboxOf, contourSegments, featherU8, sampleMask } from '../ai/selection.js';
 import { rectToCrop, layerPlacement } from '../ai/plan.js';
 import { warpSubject, amountOf } from '../ai/bodywarp.js';
+import { refineMask } from '../ai/autoselect.js';
 
 const G = 1024; // 선택 격자의 긴 변
 const MAX_LONG = 1400; // 적용 때 영역을 렌더하는 긴 변
 const PREV_LONG = 560; // 미리보기
+const SNAP_LONG = 480; // 자동 경계 맞춤 계산 해상도(긴 변)
 
 export function open(ed, body) {
   const lp0 = ed.logical;
@@ -21,10 +23,10 @@ export function open(ed, body) {
   const mw = wide ? G : Math.max(16, Math.round((G * lp0.pw) / lp0.ph));
   const mh = wide ? Math.max(16, Math.round((G * lp0.ph) / lp0.pw)) : G;
   // kind: width | height | bulge. t/b = 인물 높이 대비 위·아래 경계(0..1), v = 강도(-100..100), px/py = 확대 지점(인물 상자 비율), r = 범위(인물 큰 변 비율)
-  const S = { tab: 'select', shape: 'lasso', mode: 'add', brush: 14, feather: 25, kind: 'width', t: 0.4, b: 0.65, v: 0, px: 0.5, py: 0.2, r: 0.2, ops: [], busy: false };
+  const S = { tab: 'select', shape: 'lasso', mode: 'add', brush: 14, feather: 25, auto: true, snap: 4, kind: 'width', t: 0.4, b: 0.65, v: 0, px: 0.5, py: 0.2, r: 0.2, ops: [], busy: false };
   let closed = false, mask = newMask(mw, mh), undo = [], cur = null, cursor = null, work = null;
   let tintCv = null, tintData = null, tintAll = true, dirty = null, contour = null, contourDirty = true;
-  let prep = null, previewKey = null, token = 0;
+  let prep = null, previewKey = null, token = 0, snapSrc = null;
 
   const note = (s) => h('p', { class: 'sheet-note' }, s);
   const redraw = rafThrottle(() => { if (!closed) ed.invalidateOverlay(); });
@@ -66,11 +68,44 @@ export function open(ed, body) {
       if (!cur) return;
       const c = cur; cur = null; cursor = null;
       if (c.kind === 'brush') { pushUndo(mask); mask = work; work = null; afterSelChange(); return; }
-      if (c.pts.length >= 6) { pushUndo(mask); const m = mask.slice(); combine(m, rasterPolygon(c.pts, mw, mh), S.mode); mask = m; }
+      if (c.pts.length >= 6) {
+        const cov = rasterPolygon(c.pts, mw, mh);
+        if (S.auto) { snapLasso(cov); return; }
+        pushUndo(mask); const m = mask.slice(); combine(m, cov, S.mode); mask = m;
+      }
       afterSelChange();
     },
     cancel() { cur = null; cursor = null; work = null; tintAll = true; redraw(); },
   };
+
+  // ------------------------------------------------------------ 인물 경계 자동 맞춤 (올가미 = 힌트)
+  /** 편집 중인 사진을 선택 격자와 같은 비율의 작은 해상도로 렌더(도구가 열려 있는 동안 한 번만) */
+  async function getSnapSrc() {
+    if (snapSrc) return snapSrc;
+    const doc = ed.doc(), info = ed.info, [Wo, Ho] = orientedSize(info.w, info.h, doc.geo), crop = doc.geo.crop;
+    const full = { w: crop[2] * Wo, h: crop[3] * Ho };
+    const region = await ed.renderRegion(rectToCrop({ x: 0, y: 0, w: full.w, h: full.h }, full, crop), SNAP_LONG);
+    const k = Math.min(1, SNAP_LONG / Math.max(mw, mh)), ww = Math.max(16, Math.round(mw * k)), wh = Math.max(16, Math.round(mh * k));
+    const cv = document.createElement('canvas'); cv.width = ww; cv.height = wh;
+    const cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(region, 0, 0, ww, wh);
+    snapSrc = { ww, wh, rgba: cx.getImageData(0, 0, ww, wh).data };
+    return snapSrc;
+  }
+  async function snapLasso(cov) {
+    S.busy = true; const my = mask; let res = null;
+    try {
+      const sp = await getSnapSrc(); if (closed) return;
+      await new Promise((r) => setTimeout(r, 0)); // 계산 중 화면이 먼저 갱신되도록
+      const rough = sampleMask(cov, mw, mh, { x: 0, y: 0, w: mw, h: mh }, sp.ww, sp.wh);
+      const r = refineMask(sp.rgba, sp.ww, sp.wh, rough, { band: Math.max(2, (S.snap / 100) * Math.max(sp.ww, sp.wh)) });
+      if (r.ok) res = featherU8(sampleMask(r.mask, sp.ww, sp.wh, { x: 0, y: 0, w: sp.ww, h: sp.wh }, mw, mh), mw, mh, 0.8);
+    } catch (e) { res = null; }
+    S.busy = false; if (closed || mask !== my) return; // 닫혔거나 그 사이 선택이 바뀜
+    pushUndo(mask); const m = mask.slice(); combine(m, res || cov, S.mode); mask = m;
+    afterSelChange();
+    toast(res ? t('인물 경계에 맞춰 선택했어요. 어긋난 곳은 브러시로 고쳐요.', 'Snapped to the person’s edge. Fix leftovers with the brush.')
+      : t('경계를 찾지 못해 그린 대로 선택했어요(배경과 색이 비슷해요).', 'Could not find an edge; used your outline as drawn.'));
+  }
 
   // ------------------------------------------------------------ 오버레이
   function flushTint(src) {
@@ -211,8 +246,10 @@ export function open(ed, body) {
     body.append(Segmented({ label: t('선택 방식', 'Selection tool'), items: [{ id: 'lasso', label: t('올가미', 'Lasso') }, { id: 'brush', label: t('브러시', 'Brush') }], value: S.shape, onChange: (v) => { S.shape = v; renderBody(); } }).el,
       h('div', { class: 'row' }, Segmented({ label: t('모드', 'Mode'), items: [{ id: 'add', label: t('추가', 'Add') }, { id: 'sub', label: t('빼기', 'Subtract') }], value: S.mode, onChange: (v) => { S.mode = v; } }).el, h('div', { class: 'grow' }), undoBtn,
         IconBtn('eclipse', t('선택 반전', 'Invert selection'), () => { pushUndo(mask); mask = invertMask(mask.slice()); afterSelChange(); }), clrBtn));
+    if (S.shape === 'lasso') body.append(Segmented({ label: t('경계 자동 맞춤', 'Auto edge snap'), items: [{ id: 'on', label: t('켜짐', 'On') }, { id: 'off', label: t('꺼짐', 'Off') }], value: S.auto ? 'on' : 'off', onChange: (v) => { S.auto = v === 'on'; renderBody(); } }).el);
+    if (S.shape === 'lasso' && S.auto) body.append(Slider({ label: t('맞춤 범위', 'Snap range'), min: 1, max: 10, value: S.snap, def: 4, bipolar: false, onInput: (v) => { S.snap = v; } }).el);
     if (S.shape === 'brush') body.append(Slider({ label: t('브러시 크기', 'Brush size'), min: 2, max: 60, value: S.brush, def: 14, bipolar: false, onInput: (v) => { S.brush = v; } }).el);
-    body.append(note(t('보정할 인물을 따라 빙 둘러 그리세요(배경이 섞이지 않게 몸 선을 따라가요). 인물만 변형되고 배경은 그대로 있어요. 두 손가락으로 확대·이동할 수 있어요.', 'Draw around the person, following the body outline. Only the person is reshaped; the background stays put. Pinch to zoom and pan.')),
+    body.append(note(S.auto && S.shape === 'lasso' ? t('인물을 대충 빙 둘러 그리세요. 올가미 선 근처만 몸 경계에 맞춰 자동으로 다듬어요. 틀린 곳은 빼기·브러시로 고쳐요. 두 손가락으로 확대·이동할 수 있어요.', 'Draw loosely around the person; the area near your line snaps to the body edge. Fix mistakes with Subtract or the brush. Pinch to zoom and pan.') : t('보정할 인물을 따라 빙 둘러 그리세요(배경이 섞이지 않게 몸 선을 따라가요). 인물만 변형되고 배경은 그대로 있어요. 두 손가락으로 확대·이동할 수 있어요.', 'Draw around the person, following the body outline. Only the person is reshaped; the background stays put. Pinch to zoom and pan.')),
       Slider({ label: t('경계 부드럽게', 'Edge softness'), min: 0, max: 100, value: S.feather, def: 25, bipolar: false, onInput: (v) => { S.feather = v; }, onChange: () => invalidatePrep() }).el);
   }
   function renderAdjust() {

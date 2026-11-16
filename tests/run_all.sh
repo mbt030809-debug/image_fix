@@ -9,6 +9,7 @@ run node web/tests/unit.mjs
 run node web/tests/ai.unit.mjs
 run node web/tests/tools.unit.mjs
 run node web/tests/bodywarp.unit.mjs
+run node web/tests/autoselect.unit.mjs
 run tests/jvm/run.sh
 (cd web && node build.mjs)
 cd tests/e2e
@@ -27,6 +28,7 @@ run node ai_providers.cjs
 run node ai_gen.cjs
 run node ai_key.cjs
 run node bodyfix.cjs
+run node autoselect.cjs
 run node update.cjs
 run node layouts.cjs
 run node monkey.cjs 1 100

@@ -12,7 +12,7 @@ import { checkManually } from './update.js';
 import { openGenerate } from './tools/aigenerate.js';
 
 const SETTINGS_KEY = 'imagefix.settings';
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 
 async function decodeFile(file) {
   const opts = { imageOrientation: 'from-image', premultiplyAlpha: 'none', colorSpaceConversion: 'default' };

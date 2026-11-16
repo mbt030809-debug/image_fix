@@ -35,6 +35,7 @@ jobs:
           node web/tests/ai.unit.mjs
           node web/tests/tools.unit.mjs
           node web/tests/bodywarp.unit.mjs
+          node web/tests/autoselect.unit.mjs
       - name: 네이티브 JVM 테스트(AiClient · KeyVault · Updater)
         run: bash tests/jvm/run.sh
       - name: APK 빌드(서명)
