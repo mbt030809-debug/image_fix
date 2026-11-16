@@ -19,7 +19,7 @@ const FIX = path.resolve(__dirname, '../fixtures');
   const slider = (label) => page.locator('.sheet .field, .sheet .row, .sheet div').filter({ hasText: label }).locator('input.slider').first();
   const setSlider = (idx, v) => page.evaluate(([i, v]) => { const s = document.querySelectorAll('.sheet input.slider')[i]; s.value = v; s.dispatchEvent(new Event('input', { bubbles: true })); s.dispatchEvent(new Event('change', { bubbles: true })); }, [idx, v]);
   const ring = (cx, cy, rx, ry) => { const P = []; for (let k = 0; k <= 16; k++) { const a = (k / 16) * Math.PI * 2; P.push([cx + rx * Math.cos(a), cy + ry * Math.sin(a)]); } return P; };
-  const lasso = async (pts) => { const P = []; for (const [a, b] of pts) P.push(await pt(a, b)); await page.mouse.move(P[0][0], P[0][1]); await page.mouse.down(); for (let i = 1; i < P.length; i++) { const [ax, ay] = P[i - 1], [bx, by] = P[i]; for (let s = 1; s <= 4; s++) await page.mouse.move(ax + ((bx - ax) * s) / 4, ay + ((by - ay) * s) / 4); } await page.mouse.up(); await page.waitForTimeout(150); };
+  const lasso = async (pts) => { const P = []; for (const [a, b] of pts) P.push(await pt(a, b)); await page.mouse.move(P[0][0], P[0][1]); await page.mouse.down(); for (let i = 1; i < P.length; i++) { const [ax, ay] = P[i - 1], [bx, by] = P[i]; for (let s = 1; s <= 4; s++) await page.mouse.move(ax + ((bx - ax) * s) / 4, ay + ((by - ay) * s) / 4); } await page.mouse.up(); await page.waitForTimeout(100); await page.waitForFunction(() => !window.imagefix.editor.tool.state().busy, null, { timeout: 20000 }); await page.waitForTimeout(100); };
 
   // ---------------------------------------------------------------- 열기 · 선택
   console.log('▶ 선택');
