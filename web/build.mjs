@@ -26,6 +26,10 @@ function copyDir(src, dst) {
   }
 }
 copyDir(path.join(here, 'public'), out);
+// 인물 분리(경계 자동 맞춤)용 ONNX 런타임(wasm 단일 스레드) — 번들하지 않고 정적 파일로 싣는다
+const ortDist = path.join(here, 'node_modules/onnxruntime-web/dist');
+fs.mkdirSync(path.join(out, 'ort'), { recursive: true });
+for (const f of ['ort.wasm.min.js', 'ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm']) fs.copyFileSync(path.join(ortDist, f), path.join(out, 'ort', f));
 
 let total = 0;
 (function walk(d) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else total += fs.statSync(p).size; } })(out);

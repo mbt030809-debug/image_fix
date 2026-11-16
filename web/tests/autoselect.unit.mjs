@@ -1,5 +1,6 @@
 // 인물 경계 자동 맞춤 단위 테스트. 실행: node web/tests/autoselect.unit.mjs
-import { refineMask, signedDistance } from '../src/ai/autoselect.js';
+import { refineMask, signedDistance, maskFromSaliency, components } from '../src/ai/autoselect.js';
+import { preprocess, postprocess } from '../src/ai/person.js';
 
 let pass = 0, fail = 0;
 const ok = (c, n, e = '') => { if (c) pass++; else { fail++; console.log('  ✗ FAIL:', n, e); } };
@@ -77,6 +78,24 @@ console.log('▶ 경계 조건');
   // 배경의 작은 섬(올가미 밖)이 인물로 따라오지 않음
   let stray = 0; const m = a.mask; for (let y = 0; y < 40; y++) for (let x = 0; x < 40; x++) stray += m[y * W + x] ? 1 : 0;
   ok(stray === 0, '먼 배경은 선택되지 않음');
+}
+console.log('▶ 인물 분리 모델 결과와 합치기(합성 피사체 맵)');
+{
+  const SZ = 80, sal = new Uint8Array(SZ * SZ);
+  // 모델이 낸 거친 피사체 맵: 정답을 80×80 으로 줄인 것 + 바깥에 다른 물체 하나
+  for (let y = 0; y < SZ; y++) for (let x = 0; x < SZ; x++) sal[y * SZ + x] = truth[Math.floor((y + 0.5) * H / SZ) * W + Math.floor((x + 0.5) * W / SZ)] ? 255 : 0;
+  for (let y = 4; y < 14; y++) for (let x = 4; x < 16; x++) sal[y * SZ + x] = 255; // 구석의 다른 물체
+  const r1 = maskFromSaliency(src, W, H, sal, SZ, null);
+  ok(r1.ok && iou(r1.mask, truth) > 0.95, `자동 선택: 가장 큰 덩어리만 고름 (IoU ${iou(r1.mask, truth).toFixed(3)})`);
+  const r2 = maskFromSaliency(src, W, H, sal, SZ, loose(truth, 10), { range: 14 });
+  ok(r2.ok && iou(r2.mask, truth) > 0.95, `올가미 + 모델 (IoU ${iou(r2.mask, truth).toFixed(3)})`);
+  const none = maskFromSaliency(src, W, H, new Uint8Array(SZ * SZ), SZ, loose(truth, 10), { range: 14 });
+  ok(!none.ok, '모델이 아무것도 못 찾으면 ok:false(색 맞춤으로 넘어감)');
+  const far = new Uint8Array(W * H); for (let y = 5; y < 60; y++) for (let x = 190; x < 235; x++) far[y * W + x] = 255; // 올가미가 인물이 없는 곳
+  ok(!maskFromSaliency(src, W, H, sal, SZ, far, { range: 8 }).ok, '올가미 안에 인물이 없으면 ok:false');
+  const c = components(truth, W, H); ok(c.areas.length === 2 || c.areas.length === 1, '연결 성분');
+  const p = preprocess(new Uint8ClampedArray(4 * 4).fill(255), 2, 2); ok(p.length === 12 && Math.abs(p[0] - (1 - 0.485) / 0.229) < 1e-4, '전처리');
+  const q = postprocess(new Float32Array([0.2, 0.4, 0.6])); ok(q[0] === 0 && q[2] === 255 && Math.abs(q[1] - 128) <= 1, '후처리(최소/최대 늘이기)');
 }
 console.log(`\n${fail ? '✗' : '✅'} ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

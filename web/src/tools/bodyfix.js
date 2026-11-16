@@ -10,7 +10,8 @@ import { orientedSize } from '../engine/geometry.js';
 import { newMask, rasterPolygon, combine, strokeOp, invertMask, bboxOf, contourSegments, featherU8, sampleMask } from '../ai/selection.js';
 import { rectToCrop, layerPlacement } from '../ai/plan.js';
 import { warpSubject, amountOf } from '../ai/bodywarp.js';
-import { refineMask } from '../ai/autoselect.js';
+import { refineMask, maskFromSaliency } from '../ai/autoselect.js';
+import { personMap } from '../ai/person.js';
 
 const G = 1024; // 선택 격자의 긴 변
 const MAX_LONG = 1400; // 적용 때 영역을 렌더하는 긴 변
@@ -88,23 +89,47 @@ export function open(ed, body) {
     const k = Math.min(1, SNAP_LONG / Math.max(mw, mh)), ww = Math.max(16, Math.round(mw * k)), wh = Math.max(16, Math.round(mh * k));
     const cv = document.createElement('canvas'); cv.width = ww; cv.height = wh;
     const cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(region, 0, 0, ww, wh);
-    snapSrc = { ww, wh, rgba: cx.getImageData(0, 0, ww, wh).data };
+    snapSrc = { ww, wh, cv, rgba: cx.getImageData(0, 0, ww, wh).data, sal: undefined };
     return snapSrc;
   }
+  /** 인물 분리 모델 결과(처음 한 번만 계산, 실패하면 null → 색 맞춤으로 대체) */
+  async function getSal(sp) {
+    if (sp.sal !== undefined) return sp.sal;
+    try { sp.sal = await personMap(sp.cv); } catch (e) { sp.sal = null; }
+    return sp.sal;
+  }
+  const upToGrid = (m, sp) => featherU8(sampleMask(m, sp.ww, sp.wh, { x: 0, y: 0, w: sp.ww, h: sp.wh }, mw, mh), mw, mh, 0.8);
+  /** cov: 올가미 영역(격자) 또는 null(인물 자동 선택). 반환: { res: 격자 마스크|null, how: 'ai'|'color'|'' } */
+  async function computeSnap(cov) {
+    const sp = await getSnapSrc(); if (closed) return { res: null, how: '' };
+    const first = sp.sal === undefined;
+    if (first) toast(t('인물을 분석하는 중…(처음엔 몇 초 걸려요)', 'Analyzing the person… (a few seconds the first time)'));
+    await new Promise((r) => setTimeout(r, 30)); // 안내가 먼저 그려지도록
+    const sal = await getSal(sp); if (closed) return { res: null, how: '' };
+    const rough = cov ? sampleMask(cov, mw, mh, { x: 0, y: 0, w: mw, h: mh }, sp.ww, sp.wh) : null;
+    const range = Math.max(2, (S.snap / 100) * Math.max(sp.ww, sp.wh));
+    if (sal) { const r = maskFromSaliency(sp.rgba, sp.ww, sp.wh, sal.map, sal.size, rough, { range }); if (r.ok) return { res: upToGrid(r.mask, sp), how: 'ai' }; }
+    if (rough) { const r = refineMask(sp.rgba, sp.ww, sp.wh, rough, { band: range }); if (r.ok) return { res: upToGrid(r.mask, sp), how: 'color' }; }
+    return { res: null, how: '' };
+  }
   async function snapLasso(cov) {
-    S.busy = true; const my = mask; let res = null;
-    try {
-      const sp = await getSnapSrc(); if (closed) return;
-      await new Promise((r) => setTimeout(r, 0)); // 계산 중 화면이 먼저 갱신되도록
-      const rough = sampleMask(cov, mw, mh, { x: 0, y: 0, w: mw, h: mh }, sp.ww, sp.wh);
-      const r = refineMask(sp.rgba, sp.ww, sp.wh, rough, { band: Math.max(2, (S.snap / 100) * Math.max(sp.ww, sp.wh)) });
-      if (r.ok) res = featherU8(sampleMask(r.mask, sp.ww, sp.wh, { x: 0, y: 0, w: sp.ww, h: sp.wh }, mw, mh), mw, mh, 0.8);
-    } catch (e) { res = null; }
+    S.busy = true; const my = mask; let out = { res: null, how: '' };
+    try { out = await computeSnap(cov); } catch (e) { out = { res: null, how: '' }; }
     S.busy = false; if (closed || mask !== my) return; // 닫혔거나 그 사이 선택이 바뀜
-    pushUndo(mask); const m = mask.slice(); combine(m, res || cov, S.mode); mask = m;
+    pushUndo(mask); const m = mask.slice(); combine(m, out.res || cov, S.mode); mask = m;
     afterSelChange();
-    toast(res ? t('인물 경계에 맞춰 선택했어요. 어긋난 곳은 브러시로 고쳐요.', 'Snapped to the person’s edge. Fix leftovers with the brush.')
-      : t('경계를 찾지 못해 그린 대로 선택했어요(배경과 색이 비슷해요).', 'Could not find an edge; used your outline as drawn.'));
+    toast(out.how === 'ai' ? t('인물 경계에 맞춰 선택했어요. 어긋난 곳은 빼기·브러시로 고쳐요.', 'Snapped to the person’s edge. Fix leftovers with Subtract or the brush.')
+      : out.how === 'color' ? t('색 차이로 경계를 맞췄어요(인물 인식은 실패). 어긋난 곳은 브러시로 고쳐요.', 'Snapped by color (person detection unavailable).')
+      : t('경계를 찾지 못해 그린 대로 선택했어요.', 'Could not find an edge; used your outline as drawn.'));
+  }
+  async function autoPerson() {
+    if (S.busy) return;
+    S.busy = true; const my = mask; let out = { res: null, how: '' };
+    try { out = await computeSnap(null); } catch (e) { out = { res: null, how: '' }; }
+    S.busy = false; if (closed || mask !== my) return;
+    if (out.how !== 'ai') { toast(t('인물을 찾지 못했어요. 올가미로 직접 둘러 주세요.', 'No person found. Draw around them with the lasso.')); return; }
+    pushUndo(mask); const m = mask.slice(); combine(m, out.res, S.mode); mask = m; afterSelChange();
+    toast(t('인물을 자동으로 선택했어요. 어긋난 곳은 빼기·브러시로 고쳐요.', 'Person selected. Fix leftovers with Subtract or the brush.'));
   }
 
   // ------------------------------------------------------------ 오버레이
@@ -246,6 +271,7 @@ export function open(ed, body) {
     body.append(Segmented({ label: t('선택 방식', 'Selection tool'), items: [{ id: 'lasso', label: t('올가미', 'Lasso') }, { id: 'brush', label: t('브러시', 'Brush') }], value: S.shape, onChange: (v) => { S.shape = v; renderBody(); } }).el,
       h('div', { class: 'row' }, Segmented({ label: t('모드', 'Mode'), items: [{ id: 'add', label: t('추가', 'Add') }, { id: 'sub', label: t('빼기', 'Subtract') }], value: S.mode, onChange: (v) => { S.mode = v; } }).el, h('div', { class: 'grow' }), undoBtn,
         IconBtn('eclipse', t('선택 반전', 'Invert selection'), () => { pushUndo(mask); mask = invertMask(mask.slice()); afterSelChange(); }), clrBtn));
+    body.append(Btn(t('인물 자동 선택', 'Auto-select person'), 'tonal', autoPerson, 'person-standing'));
     if (S.shape === 'lasso') body.append(Segmented({ label: t('경계 자동 맞춤', 'Auto edge snap'), items: [{ id: 'on', label: t('켜짐', 'On') }, { id: 'off', label: t('꺼짐', 'Off') }], value: S.auto ? 'on' : 'off', onChange: (v) => { S.auto = v === 'on'; renderBody(); } }).el);
     if (S.shape === 'lasso' && S.auto) body.append(Slider({ label: t('맞춤 범위', 'Snap range'), min: 1, max: 10, value: S.snap, def: 4, bipolar: false, onInput: (v) => { S.snap = v; } }).el);
     if (S.shape === 'brush') body.append(Slider({ label: t('브러시 크기', 'Brush size'), min: 2, max: 60, value: S.brush, def: 14, bipolar: false, onInput: (v) => { S.brush = v; } }).el);

@@ -174,3 +174,52 @@ export function refineMask(rgba, w, h, rough, opts = {}) {
   if (outN < fgN * 0.5 || outN > fgN * 1.6) return fallback('implausible');
   return { mask: out, ok: true, changed: ch };
 }
+
+// ------------------------------------------------------------------ 인물 분리 모델(person.js) 결과와 합치기
+import { sampleMask } from './selection.js';
+
+/** 4-이웃 연결 성분: { lab, areas } (lab 은 -1 = 배경) */
+export function components(bin, w, h) {
+  const n = w * h, lab = new Int32Array(n).fill(-1), areas = [], stack = new Int32Array(n);
+  for (let s = 0; s < n; s++) {
+    if (!bin[s] || lab[s] >= 0) continue;
+    const id = areas.length; let sp = 0, cnt = 0; stack[sp++] = s; lab[s] = id;
+    while (sp) {
+      const p = stack[--sp]; cnt++; const x = p % w;
+      if (x > 0 && bin[p - 1] && lab[p - 1] < 0) { lab[p - 1] = id; stack[sp++] = p - 1; }
+      if (x < w - 1 && bin[p + 1] && lab[p + 1] < 0) { lab[p + 1] = id; stack[sp++] = p + 1; }
+      if (p >= w && bin[p - w] && lab[p - w] < 0) { lab[p - w] = id; stack[sp++] = p - w; }
+      if (p < n - w && bin[p + w] && lab[p + w] < 0) { lab[p + w] = id; stack[sp++] = p + w; }
+    }
+    areas.push(cnt);
+  }
+  return { lab, areas };
+}
+
+/**
+ * 모델의 피사체 맵(sal: sz×sz, 0..255)으로 인물 마스크를 만든다.
+ *  lasso(0..255, w×h)가 있으면 그 주변(range px)으로 제한하고, 없으면 가장 큰 덩어리(인물 자동 선택)를 고른다.
+ *  끝으로 색·가장자리 맞춤(refineMask)으로 경계를 다듬는다(모델 해상도가 낮아서).
+ * 반환 { mask(0/255), ok, why }
+ */
+export function maskFromSaliency(rgba, w, h, sal, sz, lasso, opts = {}) {
+  const n = w * h, s = sampleMask(sal, sz, sz, { x: 0, y: 0, w: sz, h: sz }, w, h);
+  const bin = new Uint8Array(n);
+  let lassoN = 0;
+  if (lasso) {
+    const range = Math.max(2, opts.range != null ? opts.range : 0.04 * Math.max(w, h));
+    const d = signedDistance(lasso.map((v) => (v >= 128 ? 255 : 0)), w, h, range + 2);
+    for (let i = 0; i < n; i++) { if (d[i] > 0) lassoN++; if (s[i] >= (opts.thr || 128) && d[i] > -range) bin[i] = 255; }
+    if (!lassoN) return { mask: bin, ok: false, why: 'empty' };
+    let inN = 0; for (let i = 0; i < n; i++) if (bin[i] && d[i] > 0) inN++;
+    if (inN < lassoN * 0.2) return { mask: bin, ok: false, why: 'no-person' }; // 올가미 안에서 모델이 인물을 못 찾음
+  } else for (let i = 0; i < n; i++) if (s[i] >= (opts.thr || 128)) bin[i] = 255;
+  const { lab, areas } = components(bin, w, h);
+  if (!areas.length) return { mask: bin, ok: false, why: 'none' };
+  const big = Math.max(...areas), keep = areas.map((a) => (lasso ? a >= big * 0.04 : a === big));
+  const rough = new Uint8Array(n); let rN = 0;
+  for (let i = 0; i < n; i++) if (lab[i] >= 0 && keep[lab[i]]) { rough[i] = 255; rN++; }
+  if (rN < n * 0.002) return { mask: rough, ok: false, why: 'tiny' };
+  const r = refineMask(rgba, w, h, rough, { band: Math.max(2, (opts.edge != null ? opts.edge : 0.012) * Math.max(w, h)), prior: 2.5 });
+  return { mask: r.ok ? r.mask : rough, ok: true, refined: r.ok };
+}

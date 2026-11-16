@@ -29,6 +29,7 @@ run node ai_gen.cjs
 run node ai_key.cjs
 run node bodyfix.cjs
 run node autoselect.cjs
+run node person.cjs
 run node update.cjs
 run node layouts.cjs
 run node monkey.cjs 1 100
