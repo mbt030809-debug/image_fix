@@ -1,8 +1,8 @@
 {
-  "versionCode": 26111515,
-  "versionName": "1.9.0",
+  "versionCode": 26111605,
+  "versionName": "2.0.0",
   "apk": "release/ImageFix_2026-11-15.apk",
-  "sha256": "299a6f55639e12b925b84dc18a9a9ee3a62b23309a3f7989c82581a99e813238",
-  "size": 3729886,
-  "notes": "- deAPI(deapi.ai) 이미지 편집 추가 — 설정에서 API 키 입력, 모델 이름은 직접 지정 가능\n- 앱 안 업데이트 · AI 요청 백그라운드 유지(이전 버전 기능 포함)"
+  "sha256": "36236ec9de2805c9fd2f1d53070361656d4e079fc84acb6fb2a8685a7f9069ec",
+  "size": 3738078,
+  "notes": "- 새 도구 \"체형\"(다듬기): 인물만 선택해 폭·길이·확대/축소를 조절 — 배경은 움직이지 않아요\n- deAPI 편집 · 앱 안 업데이트 · AI 요청 백그라운드 유지(이전 기능 포함)"
 }

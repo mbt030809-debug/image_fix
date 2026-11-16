@@ -73,7 +73,7 @@ const check = (name, ok, extra = '') => { console.log((ok ? '  ✓ ' : '  ✗ ')
     const got = await page.evaluate(() => ({ id: window.imagefix.editor.toolId, open: !document.querySelector('.editor.ed .sheet').hidden }));
     opened.push(got.id === id && got.open);
   }
-  check('all 16 tools open through their group', opened.length === 16 && opened.every(Boolean), JSON.stringify(opened.map((o, i) => (o ? '' : ids[i])).filter(Boolean)));
+  check('all 17 tools open through their group', opened.length === 17 && opened.every(Boolean), JSON.stringify(opened.map((o, i) => (o ? '' : ids[i])).filter(Boolean)));
   await selTool(page, 'adjust'); await page.waitForTimeout(100);
 
   // 새 사진 → 접힘으로 시작
