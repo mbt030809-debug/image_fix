@@ -11,12 +11,12 @@ console.log('▶ 상위/하위 목록');
 {
   const ids = [...TOOLS, ...ACTIONS].map((x) => x.id);
   ok(new Set(ids).size === ids.length, 'ids are unique across tools and actions');
-  ok(TOOLS.length === 16 && ACTIONS.length === 2, 'sixteen tools + two actions');
+  ok(TOOLS.length === 17 && ACTIONS.length === 2, 'seventeen tools + two actions');
   const grouped = GROUPS.flatMap((g) => g.items);
   ok(new Set(grouped).size === grouped.length, 'no item sits in two groups');
   ok(ids.every((id) => grouped.includes(id)) && grouped.every((id) => ids.includes(id)), 'every tool/action belongs to exactly one group');
   ok(GROUPS.length === 6 && GROUPS.length < TOOLS.length / 2, 'six top-level groups (was sixteen tools in one strip)');
-  const expect = { canvas: ['crop', 'resize', 'frame'], tune: ['adjust', 'color', 'curves', 'filter', 'effects'], refine: ['retouch', 'brush', 'cutout'], decor: ['text', 'sticker', 'draw'], aitools: ['ai', 'aigen', 'aiset'], layers: ['layers'] };
+  const expect = { canvas: ['crop', 'resize', 'frame'], tune: ['adjust', 'color', 'curves', 'filter', 'effects'], refine: ['retouch', 'brush', 'cutout', 'body'], decor: ['text', 'sticker', 'draw'], aitools: ['ai', 'aigen', 'aiset'], layers: ['layers'] };
   ok(GROUPS.map((g) => g.id).join() === 'canvas,tune,refine,decor,aitools,layers', 'group order: canvas, tune, refine, decor, AI tools, layers');
   for (const g of GROUPS) ok(JSON.stringify(g.items) === JSON.stringify(expect[g.id]), `${g.id} → ${expect[g.id].join(', ')}`, JSON.stringify(g.items));
   ok(GROUPS.filter((g) => !g.direct).every((g) => g.items.length >= 2 && g.items.length <= 5), 'sub-lists have 2–5 items (fit one row without scrolling)');

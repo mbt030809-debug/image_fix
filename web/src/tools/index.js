@@ -18,6 +18,7 @@ import * as sticker from './sticker.js';
 import * as draw from './draw.js';
 import * as frame from './frame.js';
 import * as cutout from './cutout.js';
+import * as bodyfix from './bodyfix.js';
 import * as layers from './layers.js';
 import { openGenerate } from './aigenerate.js';
 import { openAiSettings } from './aisettings.js';
@@ -35,6 +36,7 @@ export const TOOLS = [
   { id: 'retouch', icon: 'bandage', label: () => t('리터치', 'Retouch'), open: retouch.open },
   { id: 'brush', icon: 'brush', label: () => t('브러시', 'Brush'), open: brush.open },
   { id: 'cutout', icon: 'scissors', label: () => t('배경 제거', 'Cutout'), open: cutout.open },
+  { id: 'body', icon: 'person-standing', label: () => t('체형', 'Body'), title: () => t('얼굴·체형 보정', 'Face & body reshape'), open: bodyfix.open },
   { id: 'text', icon: 'type', label: () => t('텍스트', 'Text'), open: text.open },
   { id: 'sticker', icon: 'smile', label: () => t('스티커', 'Stickers'), open: sticker.open },
   { id: 'draw', icon: 'pen-line', label: () => t('그리기', 'Draw'), open: draw.open },
@@ -72,7 +74,7 @@ export const ACTIONS = [
 export const GROUPS = [
   { id: 'canvas', icon: 'square-dashed', label: () => t('캔버스', 'Canvas'), items: ['crop', 'resize', 'frame'] },
   { id: 'tune', icon: 'sun', label: () => t('보정', 'Tune'), items: ['adjust', 'color', 'curves', 'filter', 'effects'] },
-  { id: 'refine', icon: 'scan-face', label: () => t('다듬기', 'Refine'), items: ['retouch', 'brush', 'cutout'] },
+  { id: 'refine', icon: 'scan-face', label: () => t('다듬기', 'Refine'), items: ['retouch', 'brush', 'cutout', 'body'] },
   { id: 'decor', icon: 'shapes', label: () => t('꾸미기', 'Overlay'), items: ['text', 'sticker', 'draw'] },
   { id: 'aitools', icon: 'bot', label: () => t('AI 도구', 'AI tools'), items: ['ai', 'aigen', 'aiset'] },
   { id: 'layers', icon: 'layers', label: () => t('레이어', 'Layers'), items: ['layers'], direct: true },

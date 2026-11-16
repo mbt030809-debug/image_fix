@@ -58,7 +58,7 @@ async function waitIdle(page, ms = 150) {
 }
 
 // 도구 → 상위 목록(분류). 하단 줄에는 분류만 보이므로, 분류를 눌러 하위 목록을 연 뒤 도구를 누른다(레이어는 분류가 곧 도구)
-const GROUP_OF = { crop: 'canvas', resize: 'canvas', frame: 'canvas', adjust: 'tune', color: 'tune', curves: 'tune', filter: 'tune', effects: 'tune', retouch: 'refine', brush: 'refine', cutout: 'refine', text: 'decor', sticker: 'decor', draw: 'decor', ai: 'aitools', layers: 'layers' };
+const GROUP_OF = { crop: 'canvas', resize: 'canvas', frame: 'canvas', adjust: 'tune', color: 'tune', curves: 'tune', filter: 'tune', effects: 'tune', retouch: 'refine', brush: 'refine', cutout: 'refine', body: 'refine', text: 'decor', sticker: 'decor', draw: 'decor', ai: 'aitools', layers: 'layers' };
 async function selTool(page, id, opts) {
   const g = GROUP_OF[id];
   if (g && g !== 'layers' && !(await page.locator(`.subrow [data-tool="${id}"]`).isVisible())) await page.click(`.strip [data-group="${g}"]`);

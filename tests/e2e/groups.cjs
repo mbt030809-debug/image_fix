@@ -39,7 +39,7 @@ const check = (name, ok, extra = '') => { console.log((ok ? '  ✓ ' : '  ✗ ')
   await page.click('.subrow [data-tool=color]'); await waitIdle(page, 300);
   check('switch within the group in one tap; group stays open', (await title()) === '색상' && (await subSel()).join() === 'color' && (await groupSel()).join() === 'tune');
   await page.click('.strip [data-group=refine]'); await page.waitForTimeout(200);
-  check('tapping another group closes the open tool and shows that group', !(await sheetOpen()) && (await texts('.subrow .lbl')).join() === '리터치,브러시,배경 제거' && (await groupSel()).join() === 'refine');
+  check('tapping another group closes the open tool and shows that group', !(await sheetOpen()) && (await texts('.subrow .lbl')).join() === '리터치,브러시,배경 제거,체형' && (await groupSel()).join() === 'refine');
   await page.click('.subrow [data-tool=cutout]'); await waitIdle(page, 300);
   check('"배경 제거" lives under 다듬기', (await title()) === '배경 제거' && (await subSel()).join() === 'cutout');
   await page.evaluate(() => window.imagefix.editor.openTool('text')); await waitIdle(page, 300);

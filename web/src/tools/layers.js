@@ -7,6 +7,7 @@ const LABEL = (L) => {
   if (L.t === 'text') return '“' + String(L.text || '').replace(/\n/g, ' ').slice(0, 14) + '”';
   if (L.t === 'emoji') return L.ch;
   if (L.t === 'shape') return t('도형', 'Shape') + ' · ' + L.kind;
+  if (L.t === 'image' && L.fx && L.fx.kind === 'body') return t('체형 보정', 'Body reshape');
   if (L.t === 'image' && L.ai) return t('AI 수정', 'AI edit') + ' · ' + String(L.ai.prompt || '').replace(/\n/g, ' ').slice(0, 12);
   if (L.t === 'image') return t('사진', 'Photo');
   if (L.t === 'draw') return t('그리기', 'Drawing');
@@ -37,7 +38,7 @@ export function open(ed, body) {
       const L = layers[i];
       const row = h('div', { class: 'layer-row', 'aria-current': String(ed.sel === L.id) },
         IconBtn(L.hidden ? 'eye-off' : 'eye', L.hidden ? t('보이기', 'Show') : t('숨기기', 'Hide'), () => { ed.updateLayer(L.id, { hidden: !L.hidden }, true, t('레이어 표시', 'Visibility')); render(); }),
-        h('button', { class: 'nm', type: 'button' }, icon(L.ai ? 'sparkle' : (ICON[L.t] || 'layers'), 'sm'), h('span', { style: { marginLeft: '8px', overflow: 'hidden', textOverflow: 'ellipsis' } }, LABEL(L))),
+        h('button', { class: 'nm', type: 'button' }, icon(L.fx && L.fx.kind === 'body' ? 'person-standing' : L.ai ? 'sparkle' : (ICON[L.t] || 'layers'), 'sm'), h('span', { style: { marginLeft: '8px', overflow: 'hidden', textOverflow: 'ellipsis' } }, LABEL(L))),
         IconBtn('arrow-up', t('앞으로', 'Forward'), () => { ed.moveLayer(L.id, 1); render(); }),
         IconBtn('arrow-down', t('뒤로', 'Backward'), () => { ed.moveLayer(L.id, -1); render(); }),
         IconBtn('trash-2', t('삭제', 'Delete'), () => { ed.removeLayer(L.id); render(); }));
