@@ -54,8 +54,10 @@ export function open(ed, body) {
         redraw(); schedulePreview(); return true;
       }
       cursor = [ev.sx, ev.sy];
+      // 추가/빼기는 따로 고르지 않는다: 이미 선택된 곳에서 시작하면 빼기, 선택 밖에서 시작하면 추가
+      S.mode = mask[Math.max(0, Math.min(mh - 1, Math.floor(p[1]))) * mw + Math.max(0, Math.min(mw - 1, Math.floor(p[0])))] > 127 ? 'sub' : 'add';
       if (S.shape === 'brush') { work = mask.slice(); cur = { kind: 'brush', last: p }; brushTo(p, p); redraw(); return true; }
-      cur = { kind: 'lasso', pts: [p[0], p[1]] };
+      cur = { kind: 'lasso', pts: [p[0], p[1]], mode: S.mode };
       return true;
     },
     move(ev) {
@@ -71,8 +73,8 @@ export function open(ed, body) {
       if (c.kind === 'brush') { pushUndo(mask); mask = work; work = null; afterSelChange(); return; }
       if (c.pts.length >= 6) {
         const cov = rasterPolygon(c.pts, mw, mh);
-        if (S.auto) { snapLasso(cov); return; }
-        pushUndo(mask); const m = mask.slice(); combine(m, cov, S.mode); mask = m;
+        if (S.auto) { snapLasso(cov, c.mode); return; }
+        pushUndo(mask); const m = mask.slice(); combine(m, cov, c.mode); mask = m;
       }
       afterSelChange();
     },
@@ -112,11 +114,11 @@ export function open(ed, body) {
     if (rough) { const r = refineMask(sp.rgba, sp.ww, sp.wh, rough, { band: range }); if (r.ok) return { res: upToGrid(r.mask, sp), how: 'color' }; }
     return { res: null, how: '' };
   }
-  async function snapLasso(cov) {
+  async function snapLasso(cov, mode) {
     S.busy = true; const my = mask; let out = { res: null, how: '' };
     try { out = await computeSnap(cov); } catch (e) { out = { res: null, how: '' }; }
     S.busy = false; if (closed || mask !== my) return; // 닫혔거나 그 사이 선택이 바뀜
-    pushUndo(mask); const m = mask.slice(); combine(m, out.res || cov, S.mode); mask = m;
+    pushUndo(mask); const m = mask.slice(); combine(m, out.res || cov, mode); mask = m;
     afterSelChange();
     toast(out.how === 'ai' ? t('인물 경계에 맞춰 선택했어요. 어긋난 곳은 빼기·브러시로 고쳐요.', 'Snapped to the person’s edge. Fix leftovers with Subtract or the brush.')
       : out.how === 'color' ? t('색 차이로 경계를 맞췄어요(인물 인식은 실패). 어긋난 곳은 브러시로 고쳐요.', 'Snapped by color (person detection unavailable).')
@@ -128,7 +130,7 @@ export function open(ed, body) {
     try { out = await computeSnap(null); } catch (e) { out = { res: null, how: '' }; }
     S.busy = false; if (closed || mask !== my) return;
     if (out.how !== 'ai') { toast(t('인물을 찾지 못했어요. 올가미로 직접 둘러 주세요.', 'No person found. Draw around them with the lasso.')); return; }
-    pushUndo(mask); const m = mask.slice(); combine(m, out.res, S.mode); mask = m; afterSelChange();
+    pushUndo(mask); const m = mask.slice(); combine(m, out.res, 'add'); mask = m; afterSelChange();
     toast(t('인물을 자동으로 선택했어요. 어긋난 곳은 빼기·브러시로 고쳐요.', 'Person selected. Fix leftovers with Subtract or the brush.'));
   }
 
@@ -269,14 +271,15 @@ export function open(ed, body) {
     undoBtn = IconBtn('undo-2', t('선택 되돌리기', 'Undo selection'), () => { if (!undo.length) return; mask = undo.pop(); afterSelChange(); });
     clrBtn = IconBtn('trash-2', t('선택 해제', 'Clear selection'), () => { pushUndo(mask); mask = newMask(mw, mh); afterSelChange(); });
     body.append(Segmented({ label: t('선택 방식', 'Selection tool'), items: [{ id: 'lasso', label: t('올가미', 'Lasso') }, { id: 'brush', label: t('브러시', 'Brush') }], value: S.shape, onChange: (v) => { S.shape = v; renderBody(); } }).el,
-      h('div', { class: 'row' }, Segmented({ label: t('모드', 'Mode'), items: [{ id: 'add', label: t('추가', 'Add') }, { id: 'sub', label: t('빼기', 'Subtract') }], value: S.mode, onChange: (v) => { S.mode = v; } }).el, h('div', { class: 'grow' }), undoBtn,
+      h('div', { class: 'row' }, h('div', { class: 'grow' }), undoBtn,
         IconBtn('eclipse', t('선택 반전', 'Invert selection'), () => { pushUndo(mask); mask = invertMask(mask.slice()); afterSelChange(); }), clrBtn));
     body.append(Btn(t('인물 자동 선택', 'Auto-select person'), 'tonal', autoPerson, 'person-standing'));
     if (S.shape === 'lasso') body.append(Segmented({ label: t('경계 자동 맞춤', 'Auto edge snap'), items: [{ id: 'on', label: t('켜짐', 'On') }, { id: 'off', label: t('꺼짐', 'Off') }], value: S.auto ? 'on' : 'off', onChange: (v) => { S.auto = v === 'on'; renderBody(); } }).el);
-    if (S.shape === 'lasso' && S.auto) body.append(Slider({ label: t('맞춤 범위', 'Snap range'), min: 1, max: 10, value: S.snap, def: 4, bipolar: false, onInput: (v) => { S.snap = v; } }).el);
     if (S.shape === 'brush') body.append(Slider({ label: t('브러시 크기', 'Brush size'), min: 2, max: 60, value: S.brush, def: 14, bipolar: false, onInput: (v) => { S.brush = v; } }).el);
-    body.append(note(S.auto && S.shape === 'lasso' ? t('인물을 대충 빙 둘러 그리세요. 올가미 선 근처만 몸 경계에 맞춰 자동으로 다듬어요. 틀린 곳은 빼기·브러시로 고쳐요. 두 손가락으로 확대·이동할 수 있어요.', 'Draw loosely around the person; the area near your line snaps to the body edge. Fix mistakes with Subtract or the brush. Pinch to zoom and pan.') : t('보정할 인물을 따라 빙 둘러 그리세요(배경이 섞이지 않게 몸 선을 따라가요). 인물만 변형되고 배경은 그대로 있어요. 두 손가락으로 확대·이동할 수 있어요.', 'Draw around the person, following the body outline. Only the person is reshaped; the background stays put. Pinch to zoom and pan.')),
-      Slider({ label: t('경계 부드럽게', 'Edge softness'), min: 0, max: 100, value: S.feather, def: 25, bipolar: false, onInput: (v) => { S.feather = v; }, onChange: () => invalidatePrep() }).el);
+    body.append(note(S.shape === 'brush'
+      ? t('인물 위를 칠하세요. 이미 선택된 곳에서 시작하면 지우고, 선택 밖에서 시작하면 더해요. 두 손가락으로 확대·이동할 수 있어요.', 'Paint over the person. Starting on a selected area erases; starting outside adds. Pinch to zoom and pan.')
+      : S.auto ? t('인물을 대충 빙 둘러 그리세요. 올가미 선 근처가 몸 경계에 맞춰 자동으로 다듬어져요. 선택 밖에서 시작하면 더하고, 선택 안에서 시작하면 빼요. 두 손가락으로 확대·이동할 수 있어요.', 'Draw loosely around the person; the edge snaps to the body. Start outside the selection to add, inside to subtract. Pinch to zoom and pan.')
+        : t('인물을 따라 빙 둘러 그리세요. 선택 밖에서 시작하면 더하고, 선택 안에서 시작하면 빼요. 두 손가락으로 확대·이동할 수 있어요.', 'Draw around the person. Start outside the selection to add, inside to subtract. Pinch to zoom and pan.')));
   }
   function renderAdjust() {
     const kinds = [{ id: 'width', label: t('폭', 'Width') }, { id: 'height', label: t('길이', 'Length') }, { id: 'bulge', label: t('확대·축소', 'Bulge') }];
