@@ -120,11 +120,13 @@ export function refineMask(rgba, w, h, rough, opts = {}) {
   const fallback = (why) => ({ mask: bin, ok: false, changed: 0, why });
   if (!fgN || fgN === n) return fallback('empty');
   const band = Math.max(2, opts.band != null ? opts.band : 0.03 * Math.max(w, h));
+  const prob = opts.prob, probW = opts.probW != null ? opts.probW : 1.5;
   const prior = opts.prior != null ? opts.prior : 1.2, lam = opts.smooth != null ? opts.smooth : 14;
   const d = signedDistance(bin, w, h, band + 2);
   const fgIdx = [], bgIdx = [], node = new Int32Array(n).fill(-1), bandIdx = [];
+  const unk = opts.unknown; // 미확정 띠를 직접 지정할 수 있다(모델 확률이 애매한 곳 등). 없으면 올가미 선에서 band 이내
   for (let i = 0; i < n; i++) {
-    if (d[i] > band) fgIdx.push(i); else if (d[i] < -band) bgIdx.push(i);
+    if (unk ? !unk[i] : Math.abs(d[i]) > band) { if (bin[i]) fgIdx.push(i); else bgIdx.push(i); }
     else { node[i] = bandIdx.length; bandIdx.push(i); }
   }
   if (fgIdx.length < 30 || bgIdx.length < 30 || !bandIdx.length) return fallback('no-sure');
@@ -133,19 +135,21 @@ export function refineMask(rgba, w, h, rough, opts = {}) {
   { let ov = 0, m = 0; const stepF = Math.max(1, Math.floor(fgIdx.length / 600)), stepB = Math.max(1, Math.floor(bgIdx.length / 600));
     for (let k = 0; k < fgIdx.length; k += stepF) { const p = fgIdx[k] * 4, a1 = pf(rgba[p], rgba[p + 1], rgba[p + 2]), b1 = pb(rgba[p], rgba[p + 1], rgba[p + 2]); ov += b1 / (a1 + b1); m++; }
     for (let k = 0; k < bgIdx.length; k += stepB) { const p = bgIdx[k] * 4, a1 = pf(rgba[p], rgba[p + 1], rgba[p + 2]), b1 = pb(rgba[p], rgba[p + 1], rgba[p + 2]); ov += a1 / (a1 + b1); m++; }
-    if (ov / m > 0.3) return fallback('similar'); }
+    if (ov / m > 0.3 && !prob) return fallback('similar'); }
   // 이웃 색차의 평균으로 가장자리 감도(β) 추정 (띠 근처에서만)
   const dx8 = [1, 1, 0, -1], dy8 = [0, 1, 1, 1];
   const cd = (a, b) => { const p = a * 4, q = b * 4, r = rgba[p] - rgba[q], g = rgba[p + 1] - rgba[q + 1], bb = rgba[p + 2] - rgba[q + 2]; return r * r + g * g + bb * bb; };
   let sum = 0, cnt = 0;
   for (const i of bandIdx) { const x = i % w, y = (i / w) | 0; for (let k = 0; k < 4; k++) { const xx = x + dx8[k], yy = y + dy8[k]; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue; sum += cd(i, yy * w + xx); cnt++; } }
   const beta = cnt ? 1 / (2 * Math.max(30, sum / cnt)) : 1 / 2000;
+  const edge = opts.edge, edgeK = opts.edgeK != null ? opts.edgeK : 0.3;
   const N = bandIdx.length, S = N, T = N + 1; // 그래프 노드: 띠 픽셀 + source(인물) + sink(배경)
   const g = makeGraph(N + 2, N * 6);
   const capS = new Float32Array(N), capT = new Float32Array(N);
   for (let k = 0; k < N; k++) {
     const i = bandIdx[k], p = i * 4, r = rgba[p], gg = rgba[p + 1], b = rgba[p + 2];
-    const eps = 1e-4, Df = -Math.log(pf(r, gg, b) + eps), Db = -Math.log(pb(r, gg, b) + eps);
+    const eps = 1e-4; let Df = -Math.log(pf(r, gg, b) + eps), Db = -Math.log(pb(r, gg, b) + eps);
+    if (prob) { const pp = prob[i]; Df += probW * -Math.log(pp + 0.02); Db += probW * -Math.log(1 - pp + 0.02); } // 모델 확률도 한 표로
     const pr = prior * (Math.abs(d[i]) / band) * (Math.abs(d[i]) / band + 0.3); // 올가미에서 멀수록 올가미 쪽 라벨을 선호
     capS[k] = Db + (d[i] < 0 ? pr : 0); // 배경으로 두는 비용 (source→i)
     capT[k] = Df + (d[i] > 0 ? pr : 0); // 인물로 두는 비용 (i→sink)
@@ -155,10 +159,11 @@ export function refineMask(rgba, w, h, rough, opts = {}) {
     for (let q = 0; q < 8; q++) {
       const dx = q < 4 ? dx8[q] : -dx8[q - 4], dy = q < 4 ? dy8[q] : -dy8[q - 4];
       const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
-      const j = yy * w + xx, wt = lam * Math.exp(-beta * cd(i, j)) / (dx && dy ? 1.41421356 : 1) + 0.4;
+      const j = yy * w + xx; let wt = lam * Math.exp(-beta * cd(i, j)) / (dx && dy ? 1.41421356 : 1) + 0.4;
+      if (edge && (edge[i] || edge[j])) wt *= edgeK; // 강한 가장자리(Canny) 위에서는 자르기 쉽게
       const kj = node[j];
       if (kj >= 0) { if (q < 4) g.add(k, kj, wt, wt); }
-      else if (d[j] > 0) capS[k] += wt; else capT[k] += wt;
+      else if (bin[j]) capS[k] += wt; else capT[k] += wt;
     }
   }
   for (let k = 0; k < N; k++) { const m = Math.min(capS[k], capT[k]); if (capS[k] - m > 1e-6) g.add(S, k, capS[k] - m, 0); if (capT[k] - m > 1e-6) g.add(k, T, capT[k] - m, 0); }
@@ -167,7 +172,7 @@ export function refineMask(rgba, w, h, rough, opts = {}) {
   const reach = new Uint8Array(N + 2), qu = new Int32Array(N + 2); let qh = 0, qt = 0; qu[qt++] = S; reach[S] = 1;
   while (qh < qt) { const u = qu[qh++]; for (let e = g.head[u]; e !== -1; e = g.next[e]) { const v = g.to[e]; if (!reach[v] && g.cap[e] > 1e-6) { reach[v] = 1; qu[qt++] = v; } } }
   const out = new Uint8Array(n);
-  for (let i = 0; i < n; i++) out[i] = node[i] >= 0 ? (reach[node[i]] ? 255 : 0) : (d[i] > 0 ? 255 : 0);
+  for (let i = 0; i < n; i++) out[i] = node[i] >= 0 ? (reach[node[i]] ? 255 : 0) : (bin[i] ? 255 : 0);
   tidy(out, w, h, opts.islands != null ? opts.islands : 0.01);
   let outN = 0, ch = 0; for (let i = 0; i < n; i++) { if (out[i]) outN++; if ((out[i] > 0) !== (bin[i] > 0)) ch++; }
   // 결과가 올가미와 너무 달라지면(색 구분 실패) 믿지 않는다

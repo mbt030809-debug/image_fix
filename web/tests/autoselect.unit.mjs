@@ -1,6 +1,7 @@
 // 인물 경계 자동 맞춤 단위 테스트. 실행: node web/tests/autoselect.unit.mjs
 import { refineMask, signedDistance, maskFromSaliency, components } from '../src/ai/autoselect.js';
 import { preprocess, postprocess } from '../src/ai/person.js';
+import { canny, guidedFilter, refineFromProb, refineFromLasso, resizeF, fillHoles } from '../src/ai/edgesnap.js';
 
 let pass = 0, fail = 0;
 const ok = (c, n, e = '') => { if (c) pass++; else { fail++; console.log('  ✗ FAIL:', n, e); } };
@@ -96,6 +97,28 @@ console.log('▶ 인물 분리 모델 결과와 합치기(합성 피사체 맵)'
   const c = components(truth, W, H); ok(c.areas.length === 2 || c.areas.length === 1, '연결 성분');
   const p = preprocess(new Uint8ClampedArray(4 * 4).fill(255), 2, 2); ok(p.length === 12 && Math.abs(p[0] - (1 - 0.485) / 0.229) < 1e-4, '전처리');
   const q = postprocess(new Float32Array([0.2, 0.4, 0.6])); ok(q[0] === 0 && q[2] === 255 && Math.abs(q[1] - 128) <= 1, '후처리(최소/최대 늘이기)');
+}
+console.log('▶ 경계 정밀화(Canny · 가이디드 필터 · 확률맵 → 마스크)');
+{
+  const e = canny(src, W, H, {}), dE = signedDistance(Uint8Array.from(e, (v) => (v ? 255 : 0)), W, H, 6), dT = signedDistance(truth, W, H, 6); let bd = 0, hit = 0;
+  for (let i = 0; i < W * H; i++) if (Math.abs(dT[i]) < 1.5) { bd++; if (dE[i] > 0 || dE[i] === 0 || Math.abs(dE[i]) <= 3) hit++; } // 실제 경계 근처 픽셀 중 Canny 선이 3px 안에 있는 비율
+  let near = 0; for (let i = 0; i < W * H; i++) if (Math.abs(dT[i]) < 1.5 && (e[i] || e[i - 1] || e[i + 1] || e[i - W] || e[i + W] || e[i - 2] || e[i + 2] || e[i - 2 * W] || e[i + 2 * W])) near++;
+  ok(near / bd > 0.8, `Canny 가 실제 인물 경계의 대부분을 찾음 (${(near / bd * 100).toFixed(0)}%)`);
+  const guide = new Float32Array(W * H), m = new Float32Array(W * H); for (let i = 0; i < W * H; i++) { guide[i] = src[i * 4] / 255; m[i] = truth[i] ? 1 : 0; }
+  const q = guidedFilter(guide, m, W, H, 4, 1e-3); let mn = 1, mx = 0; for (const v of q) { if (v < mn) mn = v; if (v > mx) mx = v; }
+  ok(mn >= 0 && mx <= 1 && q[120 * W + 120] > 0.9 && q[10 * W + 10] < 0.1, '가이디드 필터: 0..1 알파, 안쪽 1 · 바깥 0');
+  // 모델 확률맵을 일부러 거칠게(80×80, 경계 흐림) 만든 뒤 정밀화
+  const SZ = 80, p = new Float32Array(SZ * SZ);
+  for (let y = 0; y < SZ; y++) for (let x = 0; x < SZ; x++) p[y * SZ + x] = truth[Math.floor((y + 0.5) * H / SZ) * W + Math.floor((x + 0.5) * W / SZ)] ? 0.95 : 0.03;
+  const coarse = resizeF(p, SZ, SZ, W, H), cb = Uint8Array.from(coarse, (v) => (v >= 0.5 ? 255 : 0));
+  const r = refineFromProb(src, W, H, p, SZ, { largest: true });
+  ok(iou(r.bin, truth) >= iou(cb, truth) - 0.005 && iou(r.bin, truth) > 0.97, `확률맵 정밀화 IoU ${iou(cb, truth).toFixed(3)} → ${iou(r.bin, truth).toFixed(3)}`);
+  const l = refineFromLasso(src, W, H, p, SZ, loose(truth, 24));
+  ok(l.ok && iou(l.bin, truth) > 0.95, `넉넉한 올가미(+24px) + 모델 IoU ${iou(l.bin, truth).toFixed(3)} (${l.mode})`);
+  const hint = refineFromLasso(src, W, H, new Float32Array(SZ * SZ).fill(0.02), SZ, loose(truth, 6));
+  ok(hint.mode === 'hint' && iou(hint.bin, truth) > 0.9, `모델이 못 찾으면 올가미를 힌트로 (IoU ${iou(hint.bin, truth).toFixed(3)})`);
+  const holey = Uint8Array.from(truth); for (let y = 100; y < 106; y++) for (let x = 110; x < 116; x++) holey[y * W + x] = 0;
+  ok(fillHoles(holey, W, H, 0.03)[103 * W + 112] === 255, '인물 안쪽의 작은 구멍을 메움');
 }
 console.log(`\n${fail ? '✗' : '✅'} ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

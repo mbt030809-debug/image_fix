@@ -10,13 +10,14 @@ import { orientedSize } from '../engine/geometry.js';
 import { newMask, rasterPolygon, combine, strokeOp, invertMask, bboxOf, contourSegments, featherU8, sampleMask } from '../ai/selection.js';
 import { rectToCrop, layerPlacement } from '../ai/plan.js';
 import { warpSubject, amountOf } from '../ai/bodywarp.js';
-import { refineMask, maskFromSaliency } from '../ai/autoselect.js';
+import { refineMask } from '../ai/autoselect.js';
+import { refineFromLasso, refineFromProb } from '../ai/edgesnap.js';
 import { personMap } from '../ai/person.js';
 
 const G = 1024; // 선택 격자의 긴 변
 const MAX_LONG = 1400; // 적용 때 영역을 렌더하는 긴 변
 const PREV_LONG = 560; // 미리보기
-const SNAP_LONG = 480; // 자동 경계 맞춤 계산 해상도(긴 변)
+const SNAP_LONG = 1024; // 자동 경계 맞춤 계산 해상도(긴 변) — 선택 격자와 같아서 결과를 그대로 쓴다
 
 export function open(ed, body) {
   const lp0 = ed.logical;
@@ -98,7 +99,8 @@ export function open(ed, body) {
     try { sp.sal = await personMap(sp.cv); } catch (e) { sp.sal = null; }
     return sp.sal;
   }
-  const upToGrid = (m, sp) => featherU8(sampleMask(m, sp.ww, sp.wh, { x: 0, y: 0, w: sp.ww, h: sp.wh }, mw, mh), mw, mh, 0.8);
+  /** 작업 해상도(ww×wh)의 알파(0..1) 또는 마스크(0..255)를 선택 격자(mw×mh)로 */
+  const alphaToGrid = (a, sp) => { const u = new Uint8Array(sp.ww * sp.wh); for (let i = 0; i < u.length; i++) u[i] = Math.round(Math.min(1, Math.max(0, a[i])) * 255); return sp.ww === mw && sp.wh === mh ? u : sampleMask(u, sp.ww, sp.wh, { x: 0, y: 0, w: sp.ww, h: sp.wh }, mw, mh); };
   /** cov: 올가미 영역(격자) 또는 null(인물 자동 선택). 반환: { res: 격자 마스크|null, how: 'ai'|'color'|'' } */
   async function computeSnap(cov) {
     const sp = await getSnapSrc(); if (closed) return { res: null, how: '' };
@@ -108,8 +110,12 @@ export function open(ed, body) {
     const sal = await getSal(sp); if (closed) return { res: null, how: '' };
     const rough = cov ? sampleMask(cov, mw, mh, { x: 0, y: 0, w: mw, h: mh }, sp.ww, sp.wh) : null;
     const range = Math.max(2, (S.snap / 100) * Math.max(sp.ww, sp.wh));
-    if (sal) { const r = maskFromSaliency(sp.rgba, sp.ww, sp.wh, sal.map, sal.size, rough, { range }); if (r.ok) return { res: upToGrid(r.mask, sp), how: 'ai' }; }
-    if (rough) { const r = refineMask(sp.rgba, sp.ww, sp.wh, rough, { band: range }); if (r.ok) return { res: upToGrid(r.mask, sp), how: 'color' }; }
+    if (sal) {
+      // 올가미 = 힌트, 모델 확률 = 띠 안의 한 표, 색 + Canny 가장자리 = 경계 위치(고해상도, 띠 안에서만 계산)
+      if (rough) { const r = refineFromLasso(sp.rgba, sp.ww, sp.wh, sal.map, sal.size, rough); if (r.ok) return { res: alphaToGrid(r.alpha, sp), how: 'ai' }; }
+      else { const r = refineFromProb(sp.rgba, sp.ww, sp.wh, sal.map, sal.size, { largest: true }); let n = 0; for (let i = 0; i < r.bin.length; i++) if (r.bin[i]) n++; if (n > sp.ww * sp.wh * 0.002) return { res: alphaToGrid(r.alpha, sp), how: 'ai' }; }
+    }
+    if (rough) { const r = refineMask(sp.rgba, sp.ww, sp.wh, rough, { band: range }); if (r.ok) return { res: alphaToGrid(Float32Array.from(r.mask, (v) => v / 255), sp), how: 'color' }; }
     return { res: null, how: '' };
   }
   async function snapLasso(cov, mode) {

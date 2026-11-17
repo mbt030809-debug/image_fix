@@ -2,7 +2,7 @@
 
 사진 보정·필터·자르기부터 텍스트·스티커·리터치·콜라주까지 한 앱에서. 기본은 **오프라인**으로 동작하고, 인터넷 권한은 선택 기능인 **AI 기능**(AI 수정 · AI로 이미지 만들기 — Cloudflare · ModelScope · Gemini · fal.ai, 내 키/토큰으로 선택한 영역/문구만 전송)에만 쓰입니다. 쓰지 않으면 사진은 기기 밖으로 나가지 않습니다.
 
-- 빌드 날짜: 2026-11-15 · 버전 2.2.3 · Android 8.0(API 26) 이상, WebView 90+ (Play 스토어 자동 업데이트 기준 대부분 충족)
+- 빌드 날짜: 2026-11-15 · 버전 2.3.0 · Android 8.0(API 26) 이상, WebView 90+ (Play 스토어 자동 업데이트 기준 대부분 충족)
 - APK: [`release/ImageFix_2026-11-15.apk`](release/ImageFix_2026-11-15.apk)
 
 ![스크린샷](docs/screenshots_2026-11-15.jpg)
@@ -84,7 +84,8 @@ node tests/e2e/ai_providers.cjs         # Gemini·ModelScope 편집·fal.ai 마�
 node tests/e2e/ai_gen.cjs               # 문구만으로 그리기(홈 이미지 만들기: Cloudflare·Gemini, 문구로 채우기)
 node tests/e2e/bodyfix.cjs              # 체형 보정(인물만 변형 · 배경 불변 · 적용/되돌리기)
 node web/tests/bodywarp.unit.mjs        # 체형 보정 엔진(변형·배경 채우기) 22개 검증
-node web/tests/autoselect.unit.mjs      # 인물 경계 자동 맞춤·모델 결과 합치기 20개 검증
+node web/tests/autoselect.unit.mjs      # 인물 경계 자동 맞춤·Canny·가이디드 필터·모델 결과 합치기 26개 검증
+python3 tests/eval/make_maps.py … && node tests/eval/eval.mjs …   # (개발 전용) 경계 정밀화 평가 — 어려운 합성 사진·기준 모델 비교, 결과는 docs/BODY_RESHAPE 참고
 node tests/e2e/autoselect.cjs           # 느슨한 올가미 → 인물 경계(IoU)
 node tests/e2e/person.cjs               # 인물 분리 모델(실제 사진 · 모델 차단 시 대체)
 node tests/e2e/update.cjs               # 앱 업데이트(확인·안내·내려받기·설치 허용·실패·자동 확인 끄기)
