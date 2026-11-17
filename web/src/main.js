@@ -24,6 +24,6 @@ function start() {
   window.addEventListener('unhandledrejection', (e) => report(e.reason));
   window.addEventListener('error', (e) => { if (e.message && !/ResizeObserver/.test(e.message)) report(e.error || e.message); });
   window.imagefix = new App(root);
-  setTimeout(() => autoCheck(window.imagefix), 4000); // 새 버전 확인(12시간에 한 번, 설정에서 끌 수 있음)
+  setTimeout(() => autoCheck(window.imagefix), 4000); // 새 버전 확인(실행할 때마다, 설정에서 끌 수 있음)
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();

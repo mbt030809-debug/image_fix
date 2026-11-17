@@ -30,7 +30,8 @@ const FIX = path.resolve(__dirname, '../fixtures');
   check('"Later" closes it without downloading', (await calls()) === 'check' && (await page.locator('.dialog').count()) === 0);
   await page.reload(); await page.waitForSelector('.home .tile', { timeout: 15000 });
   await page.waitForTimeout(6500);
-  check('checked within the last 12 hours → no new check, no dialog on the next start', (await calls()) === '' && (await page.locator('.dialog').count()) === 0);
+  check('every start checks again (no 12-hour wait): the dialog shows again for the same version', (await calls()) === 'check' && (await page.locator('.dialog').count()) === 1);
+  await page.click('.dialog .btn >> text=나중에'); await page.waitForTimeout(200);
 
   // ---------------------------------------------------------------- 2) 설정: 수동 확인
   console.log('▶ 설정: 새 버전 확인');

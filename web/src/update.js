@@ -1,10 +1,9 @@
 // 앱 업데이트: GitHub 의 release/latest.json 을 확인해 새 버전이 있으면 알리고, 내려받아 설치한다(네이티브 Updater + PackageInstaller).
-// 확인은 시작할 때 12시간에 한 번(설정에서 끌 수 있음)과 설정의 "새 버전 확인" 버튼으로 한다. 이 확인에서 보내는 것은 없다(GitHub 파일을 읽기만 한다).
+// 확인은 앱을 시작할 때마다(설정에서 끌 수 있음)과 설정의 "새 버전 확인" 버튼으로 한다. 이 확인에서 보내는 것은 없다(GitHub 파일을 읽기만 한다).
 import { t } from './i18n.js';
 import { bridge } from './bridge.js';
 import { toast, confirmDialog } from './ui/components.js';
 
-const DAY12 = 12 * 3600 * 1000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
 
@@ -78,14 +77,11 @@ export async function checkManually() {
   else toast(t('새 버전을 확인하지 못했어요. 인터넷 연결을 확인해 주세요.', "Couldn't check for updates. Check your connection.") + (st.err ? ` (${String(st.err).slice(0, 60)})` : ''), { duration: 5000 });
 }
 
-/** 시작할 때 조용히 확인(12시간에 한 번, 설정에서 끌 수 있음). 홈 화면일 때만 안내한다 */
+/** 시작할 때마다 조용히 확인(설정에서 끌 수 있음). 홈 화면일 때만 안내한다 */
 export async function autoCheck(app) {
   try {
     if (!bridge.update.available() || app.settings.autoUpdate === false) return;
-    const now = Date.now();
-    if (app.settings.updateCheckedAt && now - app.settings.updateCheckedAt < DAY12) return;
     const st = await checkStatus();
-    if (st.state === 'none' || st.state === 'available') { app.settings.updateCheckedAt = now; app.saveSettings(); }
     // 홈 화면이고 다른 창(설정·AI 시트·대화상자)이 열려 있지 않을 때만 안내한다(사용 중인 화면을 가리지 않게)
     if (st.state === 'available' && app.screen === 'home' && !document.querySelector('.msheet, .scrim, .dialog')) await offerUpdate(st);
   } catch (e) { /* 조용히 넘어간다 */ }
