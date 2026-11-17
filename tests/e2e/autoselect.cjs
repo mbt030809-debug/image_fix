@@ -29,7 +29,7 @@ const FIX = path.resolve(__dirname, '../fixtures');
 
   console.log('▶ 자동 맞춤 켜짐(기본)');
   await selTool(page, 'body'); await waitIdle(page, 300);
-  check('there is no Add/Subtract switch, nor snap-range / softness sliders', (await page.locator('.seg button >> text=빼기').count()) === 0 && (await page.locator('.seg button >> text=추가').count()) === 0 && (await page.locator('.sheet input.slider').count()) === 0);
+  check('Add/Subtract switch is there; no snap-range / softness sliders', (await page.locator('.seg button >> text=빼기').count()) === 1 && (await page.locator('.seg button >> text=추가').count()) === 1 && (await page.locator('.sheet input.slider').count()) === 0);
   check('the snap switch exists and defaults to On', (await page.locator('.seg button[aria-checked=true] >> text=켜짐').count()) >= 1);
   await drawPerson(0.035);
   const on = await score();
@@ -47,13 +47,14 @@ const FIX = path.resolve(__dirname, '../fixtures');
   await page.click('button[aria-label="선택 해제"]');
   await page.click('.seg button >> text=켜짐'); await page.waitForTimeout(150);
 
-  console.log('▶ 선택 안에서 시작하면 빼기 · 정확하게 그린 올가미');
+  console.log('▶ 빼기 · 정확하게 그린 올가미');
   await drawPerson(0.02);
   const a1 = await score();
   check('a closer outline also lands on the person', a1.iou > 0.9, JSON.stringify(a1));
+  await page.click('.seg button >> text=빼기'); await page.waitForTimeout(100);
   await lasso([[0.4, 0.5], [0.72, 0.5], [0.72, 0.9], [0.28, 0.9], [0.28, 0.5]]); await waitSnap(); await page.waitForTimeout(200);
   const a2 = await score();
-  check('starting inside the selection subtracts (lower body removed)', a2.area < a1.area - 0.1, JSON.stringify(a2));
+  check('Subtract with snapping removes the lower body', a2.area < a1.area - 0.1, JSON.stringify(a2));
 
   const errs = await page.evaluate(() => (window.__errs || []).length);
   await close(h);

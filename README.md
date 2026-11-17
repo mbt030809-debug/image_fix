@@ -2,7 +2,7 @@
 
 사진 보정·필터·자르기부터 텍스트·스티커·리터치·콜라주까지 한 앱에서. 기본은 **오프라인**으로 동작하고, 인터넷 권한은 선택 기능인 **AI 기능**(AI 수정 · AI로 이미지 만들기 — Cloudflare · ModelScope · Gemini · fal.ai, 내 키/토큰으로 선택한 영역/문구만 전송)에만 쓰입니다. 쓰지 않으면 사진은 기기 밖으로 나가지 않습니다.
 
-- 빌드 날짜: 2026-11-15 · 버전 2.2.2 · Android 8.0(API 26) 이상, WebView 90+ (Play 스토어 자동 업데이트 기준 대부분 충족)
+- 빌드 날짜: 2026-11-15 · 버전 2.2.3 · Android 8.0(API 26) 이상, WebView 90+ (Play 스토어 자동 업데이트 기준 대부분 충족)
 - APK: [`release/ImageFix_2026-11-15.apk`](release/ImageFix_2026-11-15.apk)
 
 ![스크린샷](docs/screenshots_2026-11-15.jpg)

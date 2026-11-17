@@ -54,8 +54,6 @@ export function open(ed, body) {
         redraw(); schedulePreview(); return true;
       }
       cursor = [ev.sx, ev.sy];
-      // 추가/빼기는 따로 고르지 않는다: 이미 선택된 곳에서 시작하면 빼기, 선택 밖에서 시작하면 추가
-      S.mode = mask[Math.max(0, Math.min(mh - 1, Math.floor(p[1]))) * mw + Math.max(0, Math.min(mw - 1, Math.floor(p[0])))] > 127 ? 'sub' : 'add';
       if (S.shape === 'brush') { work = mask.slice(); cur = { kind: 'brush', last: p }; brushTo(p, p); redraw(); return true; }
       cur = { kind: 'lasso', pts: [p[0], p[1]], mode: S.mode };
       return true;
@@ -271,15 +269,15 @@ export function open(ed, body) {
     undoBtn = IconBtn('undo-2', t('선택 되돌리기', 'Undo selection'), () => { if (!undo.length) return; mask = undo.pop(); afterSelChange(); });
     clrBtn = IconBtn('trash-2', t('선택 해제', 'Clear selection'), () => { pushUndo(mask); mask = newMask(mw, mh); afterSelChange(); });
     body.append(Segmented({ label: t('선택 방식', 'Selection tool'), items: [{ id: 'lasso', label: t('올가미', 'Lasso') }, { id: 'brush', label: t('브러시', 'Brush') }], value: S.shape, onChange: (v) => { S.shape = v; renderBody(); } }).el,
-      h('div', { class: 'row' }, h('div', { class: 'grow' }), undoBtn,
+      h('div', { class: 'row' }, Segmented({ label: t('모드', 'Mode'), items: [{ id: 'add', label: t('추가', 'Add') }, { id: 'sub', label: t('빼기', 'Subtract') }], value: S.mode, onChange: (v) => { S.mode = v; } }).el, h('div', { class: 'grow' }), undoBtn,
         IconBtn('eclipse', t('선택 반전', 'Invert selection'), () => { pushUndo(mask); mask = invertMask(mask.slice()); afterSelChange(); }), clrBtn));
     body.append(Btn(t('인물 자동 선택', 'Auto-select person'), 'tonal', autoPerson, 'person-standing'));
     if (S.shape === 'lasso') body.append(Segmented({ label: t('경계 자동 맞춤', 'Auto edge snap'), items: [{ id: 'on', label: t('켜짐', 'On') }, { id: 'off', label: t('꺼짐', 'Off') }], value: S.auto ? 'on' : 'off', onChange: (v) => { S.auto = v === 'on'; renderBody(); } }).el);
     if (S.shape === 'brush') body.append(Slider({ label: t('브러시 크기', 'Brush size'), min: 2, max: 60, value: S.brush, def: 14, bipolar: false, onInput: (v) => { S.brush = v; } }).el);
     body.append(note(S.shape === 'brush'
-      ? t('인물 위를 칠하세요. 이미 선택된 곳에서 시작하면 지우고, 선택 밖에서 시작하면 더해요. 두 손가락으로 확대·이동할 수 있어요.', 'Paint over the person. Starting on a selected area erases; starting outside adds. Pinch to zoom and pan.')
-      : S.auto ? t('인물을 대충 빙 둘러 그리세요. 올가미 선 근처가 몸 경계에 맞춰 자동으로 다듬어져요. 선택 밖에서 시작하면 더하고, 선택 안에서 시작하면 빼요. 두 손가락으로 확대·이동할 수 있어요.', 'Draw loosely around the person; the edge snaps to the body. Start outside the selection to add, inside to subtract. Pinch to zoom and pan.')
-        : t('인물을 따라 빙 둘러 그리세요. 선택 밖에서 시작하면 더하고, 선택 안에서 시작하면 빼요. 두 손가락으로 확대·이동할 수 있어요.', 'Draw around the person. Start outside the selection to add, inside to subtract. Pinch to zoom and pan.')));
+      ? t('인물 위를 칠하세요. 추가/빼기로 더하거나 지워요. 두 손가락으로 확대·이동할 수 있어요.', 'Paint over the person. Use Add/Subtract to add or erase. Pinch to zoom and pan.')
+      : S.auto ? t('인물을 대충 빙 둘러 그리세요. 올가미 선 근처가 몸 경계에 맞춰 자동으로 다듬어져요. 틀린 곳은 빼기·브러시로 고쳐요. 두 손가락으로 확대·이동할 수 있어요.', 'Draw loosely around the person; the edge snaps to the body. Fix mistakes with Subtract or the brush. Pinch to zoom and pan.')
+        : t('인물을 따라 빙 둘러 그리세요. 두 손가락으로 확대·이동할 수 있어요.', 'Draw around the person. Pinch to zoom and pan.')));
   }
   function renderAdjust() {
     const kinds = [{ id: 'width', label: t('폭', 'Width') }, { id: 'height', label: t('길이', 'Length') }, { id: 'bulge', label: t('확대·축소', 'Bulge') }];
