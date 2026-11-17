@@ -1,8 +1,8 @@
 {
-  "versionCode": 26111720,
-  "versionName": "2.2.2",
+  "versionCode": 26111730,
+  "versionName": "2.2.3",
   "apk": "release/ImageFix_2026-11-15.apk",
-  "sha256": "225498fd885dd505c2065f5ca5852078bf6262cee018ea143c779392a1b669f0",
+  "sha256": "ecb3147955f21efe2fa205a9cc08f00a1cb2152c23dff56fd6e7c3208192ced9",
   "size": 11254564,
-  "notes": "- 앱을 실행할 때마다 새 버전을 확인해 알려줘요(설정에서 끌 수 있어요)"
+  "notes": "- 체형: 추가/빼기 스위치를 다시 넣었어요(맞춤 범위·경계 부드럽게 슬라이더는 없는 그대로)"
 }
